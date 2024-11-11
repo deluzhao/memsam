@@ -1,3 +1,14 @@
+# Personal
+outputs/*
+checkpoints/*.pt
+.DS_Store
+__pycache__/
+*-checkpoint.ipynb
+.venv
+*.egg*
+build/*
+_C.*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
