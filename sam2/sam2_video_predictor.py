@@ -552,8 +552,8 @@ class SAM2VideoPredictor(SAM2Base):
             maskmem_pos_enc = maskmem_out["vision_pos_enc"]
             consolidated_out["maskmem_features"] = maskmem_features
             consolidated_out["maskmem_pos_enc"] = maskmem_pos_enc
-            for key in ["fused_features", "fused_pos_enc"]:
-                consolidated_out[key] = maskmem_out[key]
+            # for key in ["fused_features", "fused_pos_enc"]:
+            #     consolidated_out[key] = maskmem_out[key]
 
         return consolidated_out
 
@@ -601,7 +601,7 @@ class SAM2VideoPredictor(SAM2Base):
         batch_size = self._get_obj_num(inference_state)
 
         # Initialize hidden
-        self.memory_encoder.set_hidden(None)
+        # self.memory_encoder.set_hidden(None)
 
         # Consolidate per-object temporary outputs in "temp_output_dict_per_obj" and
         # add them into "output_dict".
@@ -978,8 +978,8 @@ class SAM2VideoPredictor(SAM2Base):
         compact_current_out = {
             "maskmem_features": maskmem_features,
             "maskmem_pos_enc": maskmem_pos_enc,
-            "fused_features": current_out["fused_features"],
-            "fused_pos_enc": current_out["fused_pos_enc"],
+            # "fused_features": current_out["fused_features"],
+            # "fused_pos_enc": current_out["fused_pos_enc"],
             "pred_masks": pred_masks,
             "obj_ptr": obj_ptr,
             "object_score_logits": object_score_logits,

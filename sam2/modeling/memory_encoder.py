@@ -169,7 +169,6 @@ class MemoryEncoder(nn.Module):
         mask_downsampler,
         fuser,
         position_encoding,
-        gru,
         in_dim=256,  # in_dim of pix_feats
     ):
         super().__init__()
@@ -182,11 +181,6 @@ class MemoryEncoder(nn.Module):
         self.out_proj = nn.Identity()
         if out_dim != in_dim:
             self.out_proj = nn.Conv2d(in_dim, out_dim, kernel_size=1)
-        
-        self.gru = gru
-
-    def set_hidden(self, hidden=None):
-        self.hidden = hidden
 
     def forward(
         self,
@@ -210,12 +204,6 @@ class MemoryEncoder(nn.Module):
         x = self.out_proj(x)
 
         pos = self.position_encoding(x).to(x.dtype)
+    
 
-        new_h, fused_x = self.gru(x, self.hidden)
-        self.set_hidden(new_h)
-        
-        
-        fused_pos = self.position_encoding(fused_x).to(x.dtype)
-        self.enc = fused_pos
-
-        return {"vision_features": x, "vision_pos_enc": [pos], "fused_features": fused_x, "fused_pos_enc": [fused_pos]}
+        return {"vision_features": x, "vision_pos_enc": [pos]}

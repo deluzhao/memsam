@@ -384,20 +384,20 @@ def main():
     parser.add_argument(
         "--sam2_checkpoint",
         type=str,
-        default="/work/hdd/bdnb/dzhao3/sam2/sam2_logs/configs/sam2.1_training/fuse_more.yaml/checkpoints/checkpoint_40.pt",
+        default="/work/hdd/bdnb/dzhao3/memsam/checkpoints/sam2.1_hiera_large.pt",
         help="path to the SAM 2 model checkpoint",
     )
     parser.add_argument(
         "--base_video_dir",
         type=str,
-        # default="/projects/bdnb/dzhao3/LVOS/valid/JPEGImages",
+        #default="/projects/bdnb/dzhao3/LVOS/valid/JPEGImages",
         default="/work/hdd/bdnb/dzhao3/datasets/train/JPEGImages",
         help="directory containing videos (as JPEG files) to run VOS prediction on",
     )
     parser.add_argument(
         "--input_mask_dir",
         type=str,
-        # default="/projects/bdnb/dzhao3/LVOS/valid/Annotations",
+        #default="/projects/bdnb/dzhao3/LVOS/valid/Annotations",
         default="/work/hdd/bdnb/dzhao3/datasets/train/Annotations",
         help="directory containing input masks (as PNG files) of each video",
     )
@@ -410,7 +410,7 @@ def main():
     parser.add_argument(
         "--output_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/outputs/sam2_more",
+        default="/projects/bdnb/dzhao3/outputs/mose_orig",
         help="directory to save the output masks (as PNG files)",
     )
     parser.add_argument(
@@ -478,6 +478,8 @@ def main():
         ][::-1]
     print(f"running VOS prediction on {len(video_names)} videos:\n{video_names}")
 
+    if not os.path.exists(args.output_mask_dir):
+        os.mkdir(args.output_mask_dir)
     finished_videos = [
             p
             for p in os.listdir(args.output_mask_dir)

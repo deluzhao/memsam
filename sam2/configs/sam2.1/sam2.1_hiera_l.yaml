@@ -84,10 +84,6 @@ model:
           layer_scale_init_value: 1e-6
           use_dwconv: True  # depth-wise convs
         num_layers: 2
-      gru:
-        _target_: sam2.modeling.memory_encoder.GRU
-        g_dim: 64
-        hidden_dim: 64
 
   num_maskmem: 7
   image_size: 1024

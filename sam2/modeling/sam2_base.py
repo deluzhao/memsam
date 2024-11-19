@@ -136,9 +136,6 @@ class SAM2Base(torch.nn.Module):
         self.maskmem_tpos_enc = torch.nn.Parameter(
             torch.zeros(num_maskmem, 1, 1, self.mem_dim)
         )
-        self.fusemem_tpos_enc = torch.nn.Parameter(
-            torch.zeros(1, 1, 1, self.mem_dim)
-        )
         trunc_normal_(self.maskmem_tpos_enc, std=0.02)
         # a single token to indicate no memory embedding from previous frames
         self.no_mem_embed = torch.nn.Parameter(torch.zeros(1, 1, self.hidden_dim))
@@ -499,6 +496,7 @@ class SAM2Base(torch.nn.Module):
         vision_pos_embeds = [x.flatten(2).permute(2, 0, 1) for x in vision_pos_embeds]
 
         return backbone_out, vision_feats, vision_pos_embeds, feat_sizes
+    
     def _score_and_select_memory(
         self,
         frame_idx,
@@ -520,6 +518,7 @@ class SAM2Base(torch.nn.Module):
 
         score = [None for i in range(len(all_frames))]
         n = t_pos_and_prevs[0][1]['pred_masks'].shape[0]
+        
         for i, frame in enumerate(all_frames):
             if frame is None:
                 continue
@@ -758,17 +757,6 @@ class SAM2Base(torch.nn.Module):
             else:
                 to_cat_memory, to_cat_memory_pos_embed, chosen_frames = self._score_and_select_memory(frame_idx, output_dict, 
                             selected_cond_outputs, unselected_cond_outputs, track_in_reverse, device)
-            
-            # Also use the fused memory
-            feats = self.memory_encoder.hidden.to(device, non_blocking=True)
-            to_cat_memory.append(feats.flatten(2).permute(2, 0, 1))
-            maskmem_enc = self.memory_encoder.enc.to(device)
-            maskmem_enc = maskmem_enc.flatten(2).permute(2, 0, 1)
-            # Temporal positional encodings
-            maskmem_enc = (
-                maskmem_enc + self.fusemem_tpos_enc[0]
-            )
-            to_cat_memory_pos_embed.append(maskmem_enc)
 
             # Construct the list of past object pointers
             if self.use_obj_ptrs_in_encoder:
@@ -1003,8 +991,8 @@ class SAM2Base(torch.nn.Module):
             )
             current_out["maskmem_features"] = maskmem_out["vision_features"]
             current_out["maskmem_pos_enc"] = maskmem_out["vision_pos_enc"]
-            current_out["fused_features"] = maskmem_out["fused_features"]
-            current_out["fused_pos_enc"] = maskmem_out["fused_pos_enc"]
+            current_out["fused_features"] = None
+            current_out["fused_pos_enc"] = None
         else:
             current_out["maskmem_features"] = None
             current_out["maskmem_pos_enc"] = None
