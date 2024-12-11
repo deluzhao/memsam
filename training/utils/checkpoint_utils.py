@@ -349,7 +349,10 @@ def load_state_dict_into_model(
     # Apply kernels
     if checkpoint_kernels is not None:
         for f in checkpoint_kernels:
-            state_dict = f(state_dict=state_dict)
+            try:
+                state_dict = f(state_dict=state_dict)
+            except:
+                print(f)
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
 
     check_load_state_dict_errors(

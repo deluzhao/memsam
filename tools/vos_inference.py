@@ -232,6 +232,7 @@ def vos_inference(
     for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
         inference_state
     ):
+        
         per_obj_output_mask = {
             out_obj_id: (out_mask_logits[i] > score_thresh).cpu().numpy()
             for i, out_obj_id in enumerate(out_obj_ids)
@@ -384,21 +385,22 @@ def main():
     parser.add_argument(
         "--sam2_checkpoint",
         type=str,
-        default="/work/hdd/bdnb/dzhao3/memsam/checkpoints/sam2.1_hiera_large.pt",
+        # default="/work/hdd/bdnb/dzhao3/memsam/sam2_logs/configs/sam2.1_training/extended_pos_embedding.yaml/checkpoints/checkpoint.pt",
+        default="/work/hdd/bdnb/dzhao3/memsam/checkpoints/combined.pt",
         help="path to the SAM 2 model checkpoint",
     )
     parser.add_argument(
         "--base_video_dir",
         type=str,
-        #default="/projects/bdnb/dzhao3/LVOS/valid/JPEGImages",
-        default="/work/hdd/bdnb/dzhao3/datasets/train/JPEGImages",
+        default="/projects/bdnb/dzhao3/LVOS/valid/JPEGImages",
+        # default="/work/hdd/bdnb/dzhao3/datasets/train/JPEGImages",
         help="directory containing videos (as JPEG files) to run VOS prediction on",
     )
     parser.add_argument(
         "--input_mask_dir",
         type=str,
-        #default="/projects/bdnb/dzhao3/LVOS/valid/Annotations",
-        default="/work/hdd/bdnb/dzhao3/datasets/train/Annotations",
+        default="/projects/bdnb/dzhao3/LVOS/valid/Annotations",
+        # default="/work/hdd/bdnb/dzhao3/datasets/train/Annotations",
         help="directory containing input masks (as PNG files) of each video",
     )
     parser.add_argument(
@@ -410,7 +412,7 @@ def main():
     parser.add_argument(
         "--output_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/outputs/mose_orig",
+        default="/projects/bdnb/dzhao3/outputs/combined",
         help="directory to save the output masks (as PNG files)",
     )
     parser.add_argument(
@@ -475,7 +477,7 @@ def main():
             p
             for p in os.listdir(args.base_video_dir)
             if os.path.isdir(os.path.join(args.base_video_dir, p))
-        ][::-1]
+        ]
     print(f"running VOS prediction on {len(video_names)} videos:\n{video_names}")
 
     if not os.path.exists(args.output_mask_dir):
@@ -493,7 +495,9 @@ def main():
             for p in os.listdir(args.output_mask_dir)
             if os.path.isdir(os.path.join(args.output_mask_dir, p))
         ] + ['d83wYdy0']
+        #if video_name in ['d83wYdy0']:#['vjG0jbkQ']:
         if video_name in finished_videos:
+        # if video_name not in ['vjG0jbkQ']:
             print("Skipping", video_name)
             continue
         print(f"\n{n_video + 1}/{len(video_names)} - running on {video_name}")

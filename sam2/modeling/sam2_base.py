@@ -14,6 +14,7 @@ from sam2.modeling.sam.mask_decoder import MaskDecoder
 from sam2.modeling.sam.prompt_encoder import PromptEncoder
 from sam2.modeling.sam.transformer import TwoWayTransformer
 from sam2.modeling.sam2_utils import get_1d_sine_pe, MLP, select_closest_cond_frames
+from sam2.modeling.memory_manager import MemoryScorer
 
 from collections import defaultdict
 import math
@@ -183,6 +184,9 @@ class SAM2Base(torch.nn.Module):
 
         self._build_sam_heads()
         self.max_cond_frames_in_attn = max_cond_frames_in_attn
+
+        # Part 5: Memory Manager
+        self.mem_score = MemoryScorer(256, self.mem_dim, 1)
 
         # Model compilation
         if compile_image_encoder:
@@ -666,6 +670,7 @@ class SAM2Base(torch.nn.Module):
         feat_sizes,
         output_dict,
         num_frames,
+        weights=None,
         track_in_reverse=False,  # tracking in reverse time order (for demo usage)
     ):
         """Fuse the current frame's visual feature map with previous memory."""
@@ -694,15 +699,17 @@ class SAM2Base(torch.nn.Module):
                 frame_idx, cond_outputs, self.max_cond_frames_in_attn
             )
 
-            if self.training:
+            if True:
+                chosen_frames = []
                 t_pos_and_prevs = [(0, out) for out in selected_cond_outputs.values()]
                 # Add last (self.num_maskmem - 1) frames before current frame for non-conditioning memory
                 # the earliest one has t_pos=1 and the latest one has t_pos=self.num_maskmem-1
                 # We also allow taking the memory frame non-consecutively (with stride>1), in which case
                 # we take (self.num_maskmem - 2) frames among every stride-th frames plus the last frame.
                 stride = 1 if self.training else self.memory_temporal_stride_for_eval
-                for t_pos in range(1, self.num_maskmem):
-                    t_rel = self.num_maskmem - t_pos  # how many frames before current frame
+                ref_frames = self.num_maskmem * 2
+                for t_pos in range(1, ref_frames):
+                    t_rel = ref_frames - t_pos  # how many frames before current frame
                     if t_rel == 1:
                         # for t_rel == 1, we take the last frame (regardless of r)
                         if not track_in_reverse:
@@ -730,17 +737,15 @@ class SAM2Base(torch.nn.Module):
                         # If an unselected conditioning frame is among the last (self.num_maskmem - 1)
                         # frames, we still attend to it as if it's a non-conditioning frame.
                         out = unselected_cond_outputs.get(prev_frame_idx, None)
+
+                        if out is not None:
+                            chosen_frames.append(prev_frame_idx)
+
                     t_pos_and_prevs.append((t_pos, out))
 
-                # random dropout of frames (excluding selected_cond) for robustness of fused memory
-                drop_frame = False
-                if self.training:
-                    non_padding = [i for i in range(len(t_pos_and_prevs)) if t_pos_and_prevs[i][1] is not None]
-                    drop_frame = (len(non_padding) > self.num_maskmem) and (torch.rand(1) < 0.25)
-
-                for i, (t_pos, prev) in enumerate(t_pos_and_prevs):
+                for t_pos, prev in t_pos_and_prevs:
                     
-                    if prev is None or (drop_frame and non_padding[torch.randint(low=len(selected_cond_outputs), high=len(non_padding), size=(1,))] == i):
+                    if prev is None:
                         continue  # skip padding frames
                     # "maskmem_features" might have been offloaded to CPU in demo use cases,
                     # so we load it back to GPU (it's a no-op if it's already on GPU).
@@ -749,15 +754,27 @@ class SAM2Base(torch.nn.Module):
                     # Spatial positional encoding (it might have been offloaded to CPU in eval)
                     maskmem_enc = prev["maskmem_pos_enc"][-1].to(device)
                     maskmem_enc = maskmem_enc.flatten(2).permute(2, 0, 1)
+                    
                     # Temporal positional encoding
-                    maskmem_enc = (
-                        maskmem_enc + self.maskmem_tpos_enc[self.num_maskmem - t_pos - 1]
-                    )
-                    to_cat_memory_pos_embed.append(maskmem_enc)
+                    pos_idx = self.num_maskmem - t_pos // 2 - 1
+                    lower, upper = math.floor(pos_idx), math.ceil(pos_idx)
+                    diff = pos_idx - lower
+                    t_pos_enc = self.maskmem_tpos_enc[lower] * (1 - diff) + self.maskmem_tpos_enc[upper] * diff
+                    to_cat_memory_pos_embed.append(maskmem_enc + t_pos_enc)
+
+                
             else:
                 to_cat_memory, to_cat_memory_pos_embed, chosen_frames = self._score_and_select_memory(frame_idx, output_dict, 
                             selected_cond_outputs, unselected_cond_outputs, track_in_reverse, device)
 
+
+            similarity_scores = self.mem_score(current_vision_feats[-1], torch.stack(to_cat_memory, dim=0), self.training)
+            if not self.training:
+                to_cat_memory = [to_cat_memory[i] for i in range(len(to_cat_memory)) if similarity_scores[i] > 0]
+                to_cat_memory_pos_embed = [to_cat_memory_pos_embed[i] for i in range(len(to_cat_memory_pos_embed)) if similarity_scores[i] > 0]
+                chosen_frames = [chosen_frames[i] for i in range(len(chosen_frames)) if similarity_scores[i] > 0]
+            else:
+                to_cat_memory = [to_cat_memory[i] * similarity_scores[i] for i in range(to_cat_memory)]
             # Construct the list of past object pointers
             if self.use_obj_ptrs_in_encoder:
                 max_obj_ptrs_in_encoder = min(num_frames, self.max_obj_ptrs_in_encoder)

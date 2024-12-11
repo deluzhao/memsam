@@ -300,7 +300,7 @@ class SAM2Train(SAM2Base):
         }
 
         # initialize hidden
-        self.memory_encoder.set_hidden(None)
+        # self.memory_encoder.set_hidden(None)
 
         for stage_id in processing_order:
             # Get the image features for the current frames
