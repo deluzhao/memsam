@@ -733,15 +733,9 @@ class SAM2Base(torch.nn.Module):
                         out = unselected_cond_outputs.get(prev_frame_idx, None)
                     t_pos_and_prevs.append((t_pos, out))
 
-                # random dropout of frames (excluding selected_cond) for robustness of fused memory
-                drop_frame = False
-                if self.training:
-                    non_padding = [i for i in range(len(t_pos_and_prevs)) if t_pos_and_prevs[i][1] is not None]
-                    drop_frame = (len(non_padding) > self.num_maskmem) and (torch.rand(1) < 0.25)
-
                 for i, (t_pos, prev) in enumerate(t_pos_and_prevs):
                     
-                    if prev is None or (drop_frame and non_padding[torch.randint(low=len(selected_cond_outputs), high=len(non_padding), size=(1,))] == i):
+                    if prev is None:
                         continue  # skip padding frames
                     # "maskmem_features" might have been offloaded to CPU in demo use cases,
                     # so we load it back to GPU (it's a no-op if it's already on GPU).
