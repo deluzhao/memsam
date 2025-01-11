@@ -157,7 +157,6 @@ def vos_inference(
             os.path.join(input_mask_dir, video_name, f"{name}.png")
         )
     ]
-    print("LENGTH:", len(frame_names), len(frame_inds))
     input_frame_inds = [0]
     # check and make sure we got at least one input frame
     if len(input_frame_inds) == 0:
@@ -220,10 +219,9 @@ def vos_inference(
     output_palette = input_palette or DAVIS_PALETTE
     video_segments = {}  # video_segments contains the per-frame segmentation results
     for name, param in predictor.named_parameters():
-        if "memory_attention" in name:
-            param.requires_grad = True
-        else:
-            param.requires_grad = False
+        param.requires_grad = False
+
+    
     for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
         inference_state, masks
     ):
@@ -233,6 +231,14 @@ def vos_inference(
         }
         video_segments[out_frame_idx] = per_obj_output_mask
 
+    scores = {}
+    try:
+        for k in inference_state["output_dict"]["non_cond_frame_outputs"].keys():
+            scores[k] = inference_state["output_dict"]["non_cond_frame_outputs"][k].get("object_mem_score", None)
+        print("Attempting to save to", os.path.join(video_dir, "scores.pt"))
+        torch.save(scores, os.path.join(video_dir, "scores.pt"))
+    except:
+        print("Failed", scores.keys())
     # write the output masks as palette PNG files to output_mask_dir
     for out_frame_idx, per_obj_output_mask in video_segments.items():
         save_masks_to_dir(
@@ -412,7 +418,7 @@ def main():
     parser.add_argument(
         "--output_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/outputs/score",
+        default="/projects/bdnb/dzhao3/outputs/score_default",
         help="directory to save the output masks (as PNG files)",
     )
     parser.add_argument(
@@ -489,6 +495,9 @@ def main():
         ] + ['d83wYdy0']
     
     print(f"finished videos: {finished_videos}")
+    # video_names = ['MKnlVo6x', 'dtHbJvYy', '7K7WVzGG', 'KfcCU1ma', 'ScFTYisJ', 'xpI7xRWN',
+    #                '48f9Llhg', 'f4DjwV55', 'raql9H7f', 'EWCZAcdt']
+    video_names = video_names[::-1]
     for n_video, video_name in enumerate(video_names):
         finished_videos = [
             p
@@ -497,7 +506,8 @@ def main():
         ] + ['d83wYdy0']
         # if video_name in finished_videos:
         # if video_name in ['d83wYdy0']:
-        if video_name not in ['raql9H7f']:
+        # if video_name not in ['EWCZAcdt']:
+        if video_name not in ['D4AgqLQL']:
             print("Skipping", video_name)
             continue
         print(f"\n{n_video + 1}/{len(video_names)} - running on {video_name}")

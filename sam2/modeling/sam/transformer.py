@@ -309,7 +309,8 @@ class RoPEAttention(Attention):
         self.rope_k_repeat = rope_k_repeat
 
     def forward(
-        self, q: Tensor, k: Tensor, v: Tensor, num_k_exclude_rope: int = 0
+        self, q: Tensor, k: Tensor, v: Tensor, num_k_exclude_rope: int = 0,
+        object_mem_score=None
     ) -> Tensor:
         # Input projections
         q = self.q_proj(q)
@@ -338,10 +339,37 @@ class RoPEAttention(Attention):
         )
 
         dropout_p = self.dropout_p if self.training else 0.0
+        if object_mem_score is not None:
+            object_frame_scores = object_mem_score[:,:object_mem_score.shape[1] // 2] 
+            object_ptr_scores = object_mem_score[:,object_mem_score.shape[1] // 2:]
+            N, M = object_frame_scores.shape
+            ones = torch.ones(N, M, 4096, k.shape[-1]).to(object_mem_score.device)
+            repeated_frame_scores = object_frame_scores.view(N, M, 1, 1) * ones
+            # K: n_obj X 1 X (n_mem * 4096) * C
+            ones = torch.ones(N, M, 4, k.shape[-1]).to(object_mem_score.device)
+            repeated_ptr_scores = object_ptr_scores.view(N, M, 1, 1) * ones
+            # K: n_obj X 1 X (n_mem * 4) * C
+            final_scores = torch.cat([
+                    repeated_frame_scores.view(N, 1, M * 4096, -1),
+                    repeated_ptr_scores.view(N, 1, M * 4, -1)
+                ], dim=2)
+            
+            # n_obj X n_mem
+            # K: n_obj X 1 X (n_mem * 4096 + n_mem * 4) X C
+            # Q: n_obj X 1 X 4096 * C
+            # n_obj X 1 X (n_mem * 4096 + n_mem * 4) X 1
+            # B: n_obj X 1 X (n_mem * 4096 + n_mem * 4) X 4096
+            ones = torch.ones_like(q).to(object_mem_score.device)
+            attn_bias = ones @ final_scores.mT
+
+
+            # print("Attention2:", final_scores.shape, attn_bias.shape, q.shape, k.shape)
+        else:
+            attn_bias = None
         # Attention
         try:
             with sdp_kernel_context(dropout_p):
-                out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+                out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p, attn_mask=attn_bias)
         except Exception as e:
             # Fall back to all kernels if the Flash attention kernel fails
             warnings.warn(
@@ -352,7 +380,7 @@ class RoPEAttention(Attention):
             )
             global ALLOW_ALL_KERNELS
             ALLOW_ALL_KERNELS = True
-            out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+            out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p, attn_mask=attn_bias)
 
         out = self._recombine_heads(out)
         out = self.out_proj(out)

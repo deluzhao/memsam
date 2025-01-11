@@ -6,14 +6,50 @@
 
 import warnings
 from collections import OrderedDict
-
+import gc
 import torch
 
 from tqdm import tqdm
 
 from sam2.modeling.sam2_base import NO_OBJ_SCORE, SAM2Base
 from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video_frames
+import numpy as np
 
+def dice_loss(inputs, targets, num_objects, loss_on_multimask=False):
+    """
+    Compute the DICE loss, similar to generalized IOU for masks
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+        num_objects: Number of objects in the batch
+        loss_on_multimask: True if multimask prediction is enabled
+    Returns:
+        Dice loss tensor
+    """
+    inputs = inputs.sigmoid()
+    if loss_on_multimask:
+        # inputs and targets are [N, M, H, W] where M corresponds to multiple predicted masks
+        assert inputs.dim() == 4 and targets.dim() == 4
+        # flatten spatial dimension while keeping multimask channel dimension
+        inputs = inputs.flatten(2)
+        targets = targets.flatten(2)
+        numerator = 2 * (inputs * targets).sum(-1)
+    else:
+        inputs = inputs.flatten(1)
+        targets = targets.flatten(1)
+        if targets.shape[0] < inputs.shape[0]:
+            targets = torch.nn.functional.pad(input=targets, pad=(0, 0, 0, inputs.shape[0] - targets.shape[0]), mode='constant', value=0)
+        elif targets.shape[0] > inputs.shape[0]:
+            inputs = torch.nn.functional.pad(input=inputs, pad=(0, 0, 0, targets.shape[0] - inputs.shape[0]), mode='constant', value=0)
+        numerator = 2 * (inputs * targets).sum(1)
+    denominator = inputs.sum(-1) + targets.sum(-1)
+    loss = 1 - (numerator + 1) / (denominator + 1)
+    if loss_on_multimask:
+        return loss / num_objects
+    return loss.sum() / num_objects
 
 class SAM2VideoPredictor(SAM2Base):
     """The predictor class to handle user interactions and manage inference states."""
@@ -40,7 +76,7 @@ class SAM2VideoPredictor(SAM2Base):
         self.clear_non_cond_mem_for_multi_obj = clear_non_cond_mem_for_multi_obj
         self.add_all_frames_to_correct_as_cond = add_all_frames_to_correct_as_cond
 
-    @torch.inference_mode()
+    # @torch.inference_mode()
     def init_state(
         self,
         video_path,
@@ -169,7 +205,7 @@ class SAM2VideoPredictor(SAM2Base):
         """Get the total number of unique object ids received so far in this session."""
         return len(inference_state["obj_idx_to_id"])
 
-    @torch.inference_mode()
+    # @torch.inference_mode()
     def add_new_points_or_box(
         self,
         inference_state,
@@ -317,7 +353,7 @@ class SAM2VideoPredictor(SAM2Base):
         """Deprecated method. Please use `add_new_points_or_box` instead."""
         return self.add_new_points_or_box(*args, **kwargs)
 
-    @torch.inference_mode()
+    # @torch.inference_mode()
     def add_new_mask(
         self,
         inference_state,
@@ -593,7 +629,7 @@ class SAM2VideoPredictor(SAM2Base):
         )
         return current_out["obj_ptr"]
 
-    @torch.inference_mode()
+    # @torch.inference_mode()
     def propagate_in_video_preflight(self, inference_state):
         """Prepare inference_state and consolidate temporary outputs before tracking."""
         # Tracking has started and we don't allow adding new objects until session is reset.
@@ -666,10 +702,11 @@ class SAM2VideoPredictor(SAM2Base):
             input_frames_inds.update(mask_inputs_per_frame.keys())
         assert all_consolidated_frame_inds == input_frames_inds
 
-    @torch.inference_mode()
+    # @torch.inference_mode()
     def propagate_in_video(
         self,
         inference_state,
+        masks,
         start_frame_idx=None,
         max_frame_num_to_track=None,
         reverse=False,
@@ -705,51 +742,119 @@ class SAM2VideoPredictor(SAM2Base):
             end_frame_idx = min(
                 start_frame_idx + max_frame_num_to_track, num_frames - 1
             )
+            # end_frame_idx = min(
+            #     start_frame_idx + max_frame_num_to_track, num_frames - 1
+            # )
+            # end_frame_idx = 40 // len(obj_ids)
             processing_order = range(start_frame_idx, end_frame_idx + 1)
+
+        device = "cuda:0"
 
         for frame_idx in tqdm(processing_order, desc="propagate in video"):
             # We skip those frames already in consolidated outputs (these are frames
             # that received input clicks or mask). Note that we cannot directly run
             # batched forward on them via `_run_single_frame_inference` because the
             # number of clicks on each object might be different.
-            if frame_idx in consolidated_frame_inds["cond_frame_outputs"]:
-                storage_key = "cond_frame_outputs"
-                current_out = output_dict[storage_key][frame_idx]
-                pred_masks = current_out["pred_masks"]
-                if clear_non_cond_mem:
-                    # clear non-conditioning memory of the surrounding frames
-                    self._clear_non_cond_mem_around_input(inference_state, frame_idx)
-            elif frame_idx in consolidated_frame_inds["non_cond_frame_outputs"]:
-                storage_key = "non_cond_frame_outputs"
-                current_out = output_dict[storage_key][frame_idx]
-                pred_masks = current_out["pred_masks"]
+            i = 0
+            frame_mask = [masks[frame_idx][key] for key in masks[frame_idx].keys()]
+            if len(frame_mask) > 0:
+                frame_mask = np.stack(frame_mask)
+                frame_mask = torch.from_numpy(frame_mask).to(device)
             else:
-                storage_key = "non_cond_frame_outputs"
-                current_out, pred_masks = self._run_single_frame_inference(
-                    inference_state=inference_state,
-                    output_dict=output_dict,
-                    frame_idx=frame_idx,
-                    batch_size=batch_size,
-                    is_init_cond_frame=False,
-                    point_inputs=None,
-                    mask_inputs=None,
-                    reverse=reverse,
-                    run_mem_encoder=True,
-                )
-                output_dict[storage_key][frame_idx] = current_out
-            # Create slices of per-object outputs for subsequent interaction with each
-            # individual object after tracking.
-            self._add_output_per_object(
-                inference_state, frame_idx, current_out, storage_key
-            )
-            inference_state["frames_already_tracked"][frame_idx] = {"reverse": reverse}
+                frame_mask = None
+                # print("Invalid mask:", frame_idx)
+            grad_iter = 20
+            loss = 0
+            while i < grad_iter + 1:
+                if frame_idx in consolidated_frame_inds["cond_frame_outputs"]:
+                    storage_key = "cond_frame_outputs"
+                    current_out = output_dict[storage_key][frame_idx]
+                    pred_masks = current_out["pred_masks"]
+                    if clear_non_cond_mem:
+                        # clear non-conditioning memory of the surrounding frames
+                        self._clear_non_cond_mem_around_input(inference_state, frame_idx)
+                    i = grad_iter+2
+                elif frame_idx in consolidated_frame_inds["non_cond_frame_outputs"]:
+                    storage_key = "non_cond_frame_outputs"
+                    current_out = output_dict[storage_key][frame_idx]
+                    pred_masks = current_out["pred_masks"]
+                    i = grad_iter+2
+                else:
+                    storage_key = "non_cond_frame_outputs"
 
-            # Resize the output mask to the original video resolution (we directly use
-            # the mask scores on GPU for output to avoid any CPU conversion in between)
-            _, video_res_masks = self._get_orig_video_res_output(
-                inference_state, pred_masks
-            )
-            yield frame_idx, obj_ids, video_res_masks
+                    if i == 0:
+                        num_mem = min(self.num_maskmem * 2, frame_idx - start_frame_idx)
+                        object_mem_score = torch.ones(1, num_mem * 2, device=device).to(torch.bfloat16).requires_grad_(True)
+                        used_mem_score = object_mem_score
+                        # optimizer = torch.optim.Adam([object_mem_score], lr=1)
+                    elif i < grad_iter:
+                        object_mem_score = output_dict[storage_key][frame_idx]["object_mem_score"]
+                        used_mem_score = object_mem_score
+                    else:
+                        if frame_idx - start_frame_idx <= num_mem:
+                            object_mem_score = torch.ones(1, num_mem * 2, device=device)
+                            used_mem_score = object_mem_score
+                        elif loss < 0.99:
+                            object_mem_score = output_dict[storage_key][frame_idx]["object_mem_score"].detach()
+                            used_mem_score = object_mem_score.clone()
+                            values, indices = torch.topk(used_mem_score[:,:used_mem_score.shape[1] // 2], self.num_maskmem)
+                            used_mem_score = torch.zeros_like(used_mem_score)
+                            used_mem_score[:,indices] = 1
+                        else:
+                            object_mem_score = torch.zeros(1, num_mem * 2, device=device)
+                            object_mem_score[:,self.num_maskmem+1:num_mem] = 1
+                            object_mem_score[:,0] = 1
+                            used_mem_score = object_mem_score
+                        # print("Final Scores:", used_mem_score.detach())
+
+                    current_out, pred_masks = self._run_single_frame_inference(
+                        inference_state=inference_state,
+                        output_dict=output_dict,
+                        frame_idx=frame_idx,
+                        batch_size=batch_size,
+                        is_init_cond_frame=False,
+                        point_inputs=None,
+                        mask_inputs=None,
+                        reverse=reverse,
+                        run_mem_encoder=True,
+                        object_mem_score=used_mem_score
+                    )
+                    current_out["object_mem_score"] = object_mem_score
+                    output_dict[storage_key][frame_idx] = current_out
+                    
+                # Create slices of per-object outputs for subsequent interaction with each
+                # individual object after tracking.
+                self._add_output_per_object(
+                    inference_state, frame_idx, current_out, storage_key
+                )
+                inference_state["frames_already_tracked"][frame_idx] = {"reverse": reverse}
+
+                # Resize the output mask to the original video resolution (we directly use
+                # the mask scores on GPU for output to avoid any CPU conversion in between)
+                _, video_res_masks = self._get_orig_video_res_output(
+                    inference_state, pred_masks
+                )
+                if frame_mask is not None and i < grad_iter:
+                    loss = dice_loss(video_res_masks.squeeze(1), frame_mask, len(obj_ids))
+                    grad_input, = torch.autograd.grad(loss, current_out["object_mem_score"], allow_unused=True)
+                    current_out["object_mem_score"] = (current_out["object_mem_score"].detach() - grad_input * 3)
+                    # if i % 5 == 0 or True:
+                    #     print(f"Mask Shapes {frame_idx}, {i}:", frame_mask.shape, video_res_masks.shape)
+                    #     print("Scores:", current_out["object_mem_score"])
+                    #     print("Loss:", loss)
+                    current_out["object_mem_score"] = torch.clamp(current_out["object_mem_score"], min=0).requires_grad_(True)
+                    # loss.backward(retain_graph=(i < grad_iter - 1))
+                    # optimizer.step()
+                    # optimizer.zero_grad()
+                elif frame_mask is not None and i == grad_iter:
+                    current_out["object_mem_score"] = current_out["object_mem_score"].detach()
+                    loss = dice_loss(video_res_masks.squeeze(1), frame_mask, len(obj_ids))
+                    # print("Final Loss:", loss)
+                elif frame_mask is None:
+                    i = grad_iter+2
+
+                i += 1
+                yield frame_idx, obj_ids, video_res_masks.detach()
 
     def _add_output_per_object(
         self, inference_state, frame_idx, current_out, storage_key
@@ -780,7 +885,7 @@ class SAM2VideoPredictor(SAM2Base):
                 obj_out["maskmem_pos_enc"] = [x[obj_slice] for x in maskmem_pos_enc]
             obj_output_dict[storage_key][frame_idx] = obj_out
 
-    @torch.inference_mode()
+    # @torch.inference_mode()
     def clear_all_prompts_in_frame(
         self, inference_state, frame_idx, obj_id, need_output=True
     ):
@@ -851,7 +956,7 @@ class SAM2VideoPredictor(SAM2Base):
         )
         return frame_idx, obj_ids, video_res_masks
 
-    @torch.inference_mode()
+    # @torch.inference_mode()
     def reset_state(self, inference_state):
         """Remove all input points or mask in all frames throughout the video."""
         self._reset_tracking_results(inference_state)
@@ -928,6 +1033,7 @@ class SAM2VideoPredictor(SAM2Base):
         reverse,
         run_mem_encoder,
         prev_sam_mask_logits=None,
+        object_mem_score=None
     ):
         """Run tracking on a single frame based on current inputs and previous memory."""
         # Retrieve correct image features
@@ -938,7 +1044,6 @@ class SAM2VideoPredictor(SAM2Base):
             current_vision_pos_embeds,
             feat_sizes,
         ) = self._get_image_feature(inference_state, frame_idx, batch_size)
-
         # point and mask should not appear as input simultaneously on the same frame
         assert point_inputs is None or mask_inputs is None
         current_out = self.track_step(
@@ -954,6 +1059,7 @@ class SAM2VideoPredictor(SAM2Base):
             track_in_reverse=reverse,
             run_mem_encoder=run_mem_encoder,
             prev_sam_mask_logits=prev_sam_mask_logits,
+            object_mem_score=object_mem_score
         )
 
         # optionally offload the output to CPU memory to save GPU space
@@ -973,13 +1079,22 @@ class SAM2VideoPredictor(SAM2Base):
         maskmem_pos_enc = self._get_maskmem_pos_enc(inference_state, current_out)
         # object pointer is a small tensor, so we always keep it on GPU memory for fast access
         obj_ptr = current_out["obj_ptr"]
-        object_score_logits = current_out["object_score_logits"]
+        object_score_logits = current_out.get("object_score_logits", None)
         # make a compact version of this frame's output to reduce the state size
+        if not self.training:
+            if maskmem_features is not None:
+                maskmem_features = maskmem_features.detach()
+            if maskmem_pos_enc is not None:
+                maskmem_pos_enc = [x.detach() for x in maskmem_pos_enc]
+            if pred_masks is not None:
+                pred_masks = pred_masks.detach()
+            if obj_ptr is not None:
+                obj_ptr = obj_ptr.detach()
+            if object_score_logits is not None:
+                object_score_logits = object_score_logits.detach()
         compact_current_out = {
             "maskmem_features": maskmem_features,
             "maskmem_pos_enc": maskmem_pos_enc,
-            # "fused_features": current_out["fused_features"],
-            # "fused_pos_enc": current_out["fused_pos_enc"],
             "pred_masks": pred_masks,
             "obj_ptr": obj_ptr,
             "object_score_logits": object_score_logits,
@@ -1054,7 +1169,7 @@ class SAM2VideoPredictor(SAM2Base):
             expanded_maskmem_pos_enc = None
         return expanded_maskmem_pos_enc
 
-    @torch.inference_mode()
+    # @torch.inference_mode()
     def remove_object(self, inference_state, obj_id, strict=False, need_output=True):
         """
         Remove an object id from the tracking state. If strict is True, we check whether

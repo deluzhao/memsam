@@ -12,7 +12,7 @@ from torch import nn, Tensor
 from sam2.modeling.sam.transformer import RoPEAttention
 
 from sam2.modeling.sam2_utils import get_activation_fn, get_clones
-
+import pdb
 
 class MemoryAttentionLayer(nn.Module):
 
@@ -63,17 +63,51 @@ class MemoryAttentionLayer(nn.Module):
         tgt = tgt + self.dropout1(tgt2)
         return tgt
 
-    def _forward_ca(self, tgt, memory, query_pos, pos, num_k_exclude_rope=0):
+    def _forward_ca(self, tgt, memory, query_pos, pos, num_k_exclude_rope=0, object_mem_score=None):
         kwds = {}
         if num_k_exclude_rope > 0:
             assert isinstance(self.cross_attn_image, RoPEAttention)
             kwds = {"num_k_exclude_rope": num_k_exclude_rope}
-
+        
         # Cross-Attention
         tgt2 = self.norm2(tgt)
+        if object_mem_score is None: 
+            key = memory + pos if self.pos_enc_at_cross_attn_keys else memory
+        else: # relative
+            if object_mem_score.requires_grad:
+                object_frame_scores = object_mem_score[:,:object_mem_score.shape[1] // 2]
+                object_frame_scores = object_frame_scores / torch.sum(object_frame_scores) * 7
+
+                object_ptr_scores = object_mem_score[:,object_mem_score.shape[1] // 2:]
+                object_ptr_scores = object_ptr_scores / torch.sum(object_ptr_scores) * 7
+            else:
+                num_selected = int(torch.sum(object_mem_score[:,:object_mem_score.shape[1] // 2] > 0).item())
+                object_frame_scores = torch.ones(1, num_selected, device=object_mem_score.device)
+                object_ptr_scores = torch.ones(1, num_selected, device=object_mem_score.device)
+
+            key_original = memory + pos if self.pos_enc_at_cross_attn_keys else memory
+            num_frame, num_ptr = object_frame_scores.shape[1], object_ptr_scores.shape[1]
+            num_frame_ = int(num_frame*4096)
+            num_object = key_original.shape[0]
+            # print(key_original.shape, object_mem_score.shape)
+            key_frame = None
+            key_ptr = None
+            try:
+                key_frame = key_original[:, :num_frame_].reshape(num_object, num_frame, 4096, -1)
+                key_ptr = key_original[:, num_frame_:].reshape(num_object, num_ptr, 4, -1)
+            except:
+                num_frame -= 1
+                num_frame_ = int(num_frame*4096)
+                key_frame = key_original[:, :num_frame_].reshape(num_object, num_frame, 4096, -1)
+                key_ptr = key_original[:, num_frame_:].reshape(num_object, num_ptr, 4, -1)
+                
+            key_frame_scale = (object_frame_scores.view(1, num_frame, 1, 1) * key_frame)
+            key_ptr_scale = (object_ptr_scores.view(1, num_frame, 1, 1) * key_ptr)
+            key = torch.cat([key_frame_scale.reshape(num_object, num_frame_, -1), key_ptr_scale.reshape(num_object, int(num_ptr*4), -1)], dim=1)
+        kwds["object_mem_score"] = None
         tgt2 = self.cross_attn_image(
             q=tgt2 + query_pos if self.pos_enc_at_cross_attn_queries else tgt2,
-            k=memory + pos if self.pos_enc_at_cross_attn_keys else memory,
+            k=key,
             v=memory,
             **kwds,
         )
@@ -87,11 +121,12 @@ class MemoryAttentionLayer(nn.Module):
         pos: Optional[Tensor] = None,
         query_pos: Optional[Tensor] = None,
         num_k_exclude_rope: int = 0,
+        object_mem_score=None,
     ) -> torch.Tensor:
 
         # Self-Attn, Cross-Attn
         tgt = self._forward_sa(tgt, query_pos)
-        tgt = self._forward_ca(tgt, memory, query_pos, pos, num_k_exclude_rope)
+        tgt = self._forward_ca(tgt, memory, query_pos, pos, num_k_exclude_rope, object_mem_score)
         # MLP
         tgt2 = self.norm3(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))
@@ -123,6 +158,7 @@ class MemoryAttention(nn.Module):
         curr_pos: Optional[Tensor] = None,  # pos_enc for self-attention inputs
         memory_pos: Optional[Tensor] = None,  # pos_enc for cross-attention inputs
         num_obj_ptr_tokens: int = 0,  # number of object pointer *tokens*
+        object_mem_score = None
     ):
         if isinstance(curr, list):
             assert isinstance(curr_pos, list)
@@ -147,10 +183,12 @@ class MemoryAttention(nn.Module):
             memory = memory.transpose(0, 1)
             memory_pos = memory_pos.transpose(0, 1)
 
+
         for layer in self.layers:
             kwds = {}
             if isinstance(layer.cross_attn_image, RoPEAttention):
-                kwds = {"num_k_exclude_rope": num_obj_ptr_tokens}
+                kwds = {"num_k_exclude_rope": num_obj_ptr_tokens,
+                        "object_mem_score": object_mem_score}
 
             output = layer(
                 tgt=output,
