@@ -74,22 +74,19 @@ class MemoryAttentionLayer(nn.Module):
         if object_mem_score is None: 
             key = memory + pos if self.pos_enc_at_cross_attn_keys else memory
         else: # relative
-            if object_mem_score.requires_grad:
-                object_frame_scores = object_mem_score[:,:object_mem_score.shape[1] // 2]
-                object_frame_scores = object_frame_scores / torch.sum(object_frame_scores) * 7
+            num_object = object_mem_score.shape[0]
 
-                object_ptr_scores = object_mem_score[:,object_mem_score.shape[1] // 2:]
-                object_ptr_scores = object_ptr_scores / torch.sum(object_ptr_scores) * 7
+            if object_mem_score.requires_grad:
+                object_frame_scores = object_mem_score
+                object_frame_scores = object_frame_scores / torch.sum(object_frame_scores, 1).view(-1, 1) * 7
             else:
-                num_selected = int(torch.sum(object_mem_score[:,:object_mem_score.shape[1] // 2] > 0).item())
-                object_frame_scores = torch.ones(1, num_selected, device=object_mem_score.device)
-                object_ptr_scores = torch.ones(1, num_selected, device=object_mem_score.device)
+                num_selected = int(torch.sum(object_mem_score > 0).item() / num_object)
+                object_frame_scores = torch.ones(num_object, num_selected, device=object_mem_score.device)
 
             key_original = memory + pos if self.pos_enc_at_cross_attn_keys else memory
-            num_frame, num_ptr = object_frame_scores.shape[1], object_ptr_scores.shape[1]
+            num_frame = num_ptr = object_frame_scores.shape[1]
             num_frame_ = int(num_frame*4096)
-            num_object = key_original.shape[0]
-            # print(key_original.shape, object_mem_score.shape)
+            
             key_frame = None
             key_ptr = None
             try:
@@ -101,8 +98,8 @@ class MemoryAttentionLayer(nn.Module):
                 key_frame = key_original[:, :num_frame_].reshape(num_object, num_frame, 4096, -1)
                 key_ptr = key_original[:, num_frame_:].reshape(num_object, num_ptr, 4, -1)
                 
-            key_frame_scale = (object_frame_scores.view(1, num_frame, 1, 1) * key_frame)
-            key_ptr_scale = (object_ptr_scores.view(1, num_frame, 1, 1) * key_ptr)
+            key_frame_scale = (object_frame_scores.view(num_object, num_frame, 1, 1) * key_frame)
+            key_ptr_scale = key_ptr
             key = torch.cat([key_frame_scale.reshape(num_object, num_frame_, -1), key_ptr_scale.reshape(num_object, int(num_ptr*4), -1)], dim=1)
         kwds["object_mem_score"] = None
         tgt2 = self.cross_attn_image(

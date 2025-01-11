@@ -695,56 +695,49 @@ class SAM2Base(torch.nn.Module):
                 frame_idx, cond_outputs, self.max_cond_frames_in_attn
             )
 
-            if True:
-                chosen_frames = []
-                t_pos_and_prevs = []
-
-                # TODO: only supports one conditioning frame for now
-                if object_mem_score.requires_grad or object_mem_score[0, 0] > 0:
-                    t_pos_and_prevs = [(0, out) for out in selected_cond_outputs.values()]
-                # Add last (self.num_maskmem - 1) frames before current frame for non-conditioning memory
-                # the earliest one has t_pos=1 and the latest one has t_pos=self.num_maskmem-1
-                # We also allow taking the memory frame non-consecutively (with stride>1), in which case
-                # we take (self.num_maskmem - 2) frames among every stride-th frames plus the last frame.
-                stride = 1 if self.training else self.memory_temporal_stride_for_eval
-                ref_frames = object_mem_score.shape[1] // 2
-                for t_pos in range(1, ref_frames):
-                    t_rel = ref_frames - t_pos  # how many frames before current frame
-                    if t_rel == 1:
-                        # for t_rel == 1, we take the last frame (regardless of r)
-                        if not track_in_reverse:
-                            # the frame immediately before this frame (i.e. frame_idx - 1)
-                            prev_frame_idx = frame_idx - t_rel
-                        else:
-                            # the frame immediately after this frame (i.e. frame_idx + 1)
-                            prev_frame_idx = frame_idx + t_rel
+            chosen_frames = []
+            t_pos_and_prevs = [(0, out) for out in selected_cond_outputs.values()]
+            # Add last (self.num_maskmem - 1) frames before current frame for non-conditioning memory
+            # the earliest one has t_pos=1 and the latest one has t_pos=self.num_maskmem-1
+            # We also allow taking the memory frame non-consecutively (with stride>1), in which case
+            # we take (self.num_maskmem - 2) frames among every stride-th frames plus the last frame.
+            stride = 1 if self.training else self.memory_temporal_stride_for_eval
+            ref_frames = object_mem_score.shape[1]
+            for t_pos in range(1, ref_frames):
+                t_rel = ref_frames - t_pos  # how many frames before current frame
+                if t_rel == 1:
+                    # for t_rel == 1, we take the last frame (regardless of r)
+                    if not track_in_reverse:
+                        # the frame immediately before this frame (i.e. frame_idx - 1)
+                        prev_frame_idx = frame_idx - t_rel
                     else:
-                        # for t_rel >= 2, we take the memory frame from every r-th frames
-                        if not track_in_reverse:
-                            # first find the nearest frame among every r-th frames before this frame
-                            # for r=1, this would be (frame_idx - 2)
-                            prev_frame_idx = ((frame_idx - 2) // stride) * stride
-                            # then seek further among every r-th frames
-                            prev_frame_idx = prev_frame_idx - (t_rel - 2) * stride
-                        else:
-                            # first find the nearest frame among every r-th frames after this frame
-                            # for r=1, this would be (frame_idx + 2)
-                            prev_frame_idx = -(-(frame_idx + 2) // stride) * stride
-                            # then seek further among every r-th frames
-                            prev_frame_idx = prev_frame_idx + (t_rel - 2) * stride
-                    out = output_dict["non_cond_frame_outputs"].get(prev_frame_idx, None)
-                    if out is None:
-                        # If an unselected conditioning frame is among the last (self.num_maskmem - 1)
-                        # frames, we still attend to it as if it's a non-conditioning frame.
-                        out = unselected_cond_outputs.get(prev_frame_idx, None)
+                        # the frame immediately after this frame (i.e. frame_idx + 1)
+                        prev_frame_idx = frame_idx + t_rel
+                else:
+                    # for t_rel >= 2, we take the memory frame from every r-th frames
+                    if not track_in_reverse:
+                        # first find the nearest frame among every r-th frames before this frame
+                        # for r=1, this would be (frame_idx - 2)
+                        prev_frame_idx = ((frame_idx - 2) // stride) * stride
+                        # then seek further among every r-th frames
+                        prev_frame_idx = prev_frame_idx - (t_rel - 2) * stride
+                    else:
+                        # first find the nearest frame among every r-th frames after this frame
+                        # for r=1, this would be (frame_idx + 2)
+                        prev_frame_idx = -(-(frame_idx + 2) // stride) * stride
+                        # then seek further among every r-th frames
+                        prev_frame_idx = prev_frame_idx + (t_rel - 2) * stride
+                out = output_dict["non_cond_frame_outputs"].get(prev_frame_idx, None)
+                if out is None:
+                    # If an unselected conditioning frame is among the last (self.num_maskmem - 1)
+                    # frames, we still attend to it as if it's a non-conditioning frame.
+                    out = unselected_cond_outputs.get(prev_frame_idx, None)
 
-                    if out is not None:
-                        if object_mem_score.requires_grad or object_mem_score[0, t_pos] > 0:
-                            chosen_frames.append(prev_frame_idx)
-                            t_pos_and_prevs.append((t_pos, out))
+                if out is not None:
+                    chosen_frames.append(prev_frame_idx)
+                    t_pos_and_prevs.append((t_pos, out))
 
-                # if ref_frames == 2 * self.num_maskmem and len(chosen_frames) < 2 * self.num_maskmem - len(selected_cond_outputs.values()):
-                #     print(f"Incorrect Frames {frame_idx}:", chosen_frames)
+            if object_mem_score.requires_grad:
                 for t_pos, prev in t_pos_and_prevs:
                     
                     if prev is None:
@@ -767,9 +760,37 @@ class SAM2Base(torch.nn.Module):
                         t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - t_pos - 1]
                     to_cat_memory_pos_embed.append(maskmem_enc + t_pos_enc)
             else:
-                to_cat_memory, to_cat_memory_pos_embed, chosen_frames = self._score_and_select_memory(frame_idx, output_dict, 
-                            selected_cond_outputs, unselected_cond_outputs, track_in_reverse, device)
+                per_obj_memory, per_obj_memory_pos_embed = defaultdict(list), defaultdict(list)
+                per_obj_tpos = defaultdict(int)
+                for t, (t_pos, prev) in enumerate(t_pos_and_prevs):
+                    if prev is None:
+                        continue  # skip padding frames
 
+                    # "maskmem_features" might have been offloaded to CPU in demo use cases,
+                    # so we load it back to GPU (it's a no-op if it's already on GPU).
+                    feats = prev["maskmem_features"].to(device, non_blocking=True)
+                    feats = feats.flatten(2).permute(2, 0, 1)
+                    # Spatial positional encoding (it might have been offloaded to CPU in eval)
+                    maskmem_enc = prev["maskmem_pos_enc"][-1].to(device)
+                    maskmem_enc = maskmem_enc.flatten(2).permute(2, 0, 1)
+
+                    n_obj = object_mem_score.shape[0]
+                    for i in range(n_obj):
+                        if object_mem_score[i][t] == 1:
+                            per_obj_memory[i].append(feats[:,i,:].unsqueeze(1))
+
+                            per_obj_memory_pos_embed[i].append(
+                                maskmem_enc[:,i,:].unsqueeze(1) + 
+                                self.maskmem_tpos_enc[self.num_maskmem - per_obj_tpos[i] - 1])
+                            per_obj_tpos[i] += 1
+
+                to_cat_memory = [torch.cat([per_obj_memory[obj][idx] 
+                                for obj in range(n_obj)], dim=1) 
+                                for idx in range(len(per_obj_memory[0]))]
+                to_cat_memory_pos_embed = [torch.cat([per_obj_memory_pos_embed[obj][idx] 
+                                for obj in range(n_obj)], dim=1) 
+                                for idx in range(len(per_obj_memory[0]))]
+                    
             # Construct the list of past object pointers
             if self.use_obj_ptrs_in_encoder:
                 max_obj_ptrs_in_encoder = min(num_frames, self.max_obj_ptrs_in_encoder)
@@ -784,20 +805,18 @@ class SAM2Base(torch.nn.Module):
                 else:
                     ptr_cond_outputs = selected_cond_outputs
 
-                pos_and_ptrs = []
-                if object_mem_score.requires_grad or object_mem_score[0, 0] > 0:
-                    pos_and_ptrs = [
-                        # Temporal pos encoding contains how far away each pointer is from current frame
+                pos_and_ptrs = [
+                    # Temporal pos encoding contains how far away each pointer is from current frame
+                    (
                         (
-                            (
-                                (frame_idx - t) * tpos_sign_mul
-                                if self.use_signed_tpos_enc_to_obj_ptrs
-                                else abs(frame_idx - t)
-                            ),
-                            out["obj_ptr"],
-                        )
-                        for t, out in ptr_cond_outputs.items()
-                    ]
+                            (frame_idx - t) * tpos_sign_mul
+                            if self.use_signed_tpos_enc_to_obj_ptrs
+                            else abs(frame_idx - t)
+                        ),
+                        out["obj_ptr"],
+                    )
+                    for t, out in ptr_cond_outputs.items()
+                ]
                 # Add up to (max_obj_ptrs_in_encoder - 1) non-conditioning frames before current frame
                 # for t_diff in range(1, max_obj_ptrs_in_encoder):
                 #     t = frame_idx + t_diff if track_in_reverse else frame_idx - t_diff
@@ -817,6 +836,20 @@ class SAM2Base(torch.nn.Module):
                     if out is not None:
                         pos_and_ptrs.append((t_diff, out["obj_ptr"]))
                     t_diff += 1
+
+                if not object_mem_score.requires_grad:
+                    per_obj_ptr = defaultdict(list)
+                    per_obj_t_diffs = defaultdict(list)
+                    n_obj = object_mem_score.shape[0]
+                    for t, (t_diff, feats) in enumerate(pos_and_ptrs):
+                        for i in range(n_obj):
+                            if object_mem_score[i][t] == 1:
+                                per_obj_ptr[i].append(feats[i,:].unsqueeze(0))
+                                per_obj_t_diffs[i].append(t_diff)
+                    pos_and_ptrs = [([per_obj_t_diffs[obj][idx] for obj in range(n_obj)],
+                                    torch.cat([per_obj_ptr[obj][idx] for obj in range(n_obj)], dim=0))
+                                    for idx in range(len(per_obj_ptr[0]))]
+                    
                 
                 # If we have at least one object pointer, add them to the across attention
                 if len(pos_and_ptrs) > 0:
@@ -831,7 +864,12 @@ class SAM2Base(torch.nn.Module):
                         obj_pos = torch.tensor(pos_list, device=device)
                         obj_pos = get_1d_sine_pe(obj_pos / t_diff_max, dim=tpos_dim)
                         obj_pos = self.obj_ptr_tpos_proj(obj_pos)
-                        obj_pos = obj_pos.unsqueeze(1).expand(-1, B, self.mem_dim)
+
+                        # handle differences between grad and non-grad passes
+                        if len(obj_pos.shape) < 3:
+                            obj_pos = obj_pos.unsqueeze(1).expand(-1, B, self.mem_dim)
+                        else:
+                            obj_pos = obj_pos.expand(-1, B, self.mem_dim)
                     else:
                         obj_pos = obj_ptrs.new_zeros(len(pos_list), B, self.mem_dim)
                     if self.mem_dim < C:
