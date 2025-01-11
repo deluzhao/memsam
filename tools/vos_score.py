@@ -507,7 +507,7 @@ def main():
         # if video_name in finished_videos:
         # if video_name in ['d83wYdy0']:
         # if video_name not in ['EWCZAcdt']:
-        if video_name not in ['D4AgqLQL']:
+        if video_name not in ['gdqCcvs2', '9mBuSvT2', 'FiRTBMg2']:
             print("Skipping", video_name)
             continue
         print(f"\n{n_video + 1}/{len(video_names)} - running on {video_name}")

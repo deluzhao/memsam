@@ -1058,6 +1058,7 @@ class SAM2Base(torch.nn.Module):
             _,
             _,
             _,
+            _,
             low_res_masks,
             high_res_masks,
             obj_ptr,
