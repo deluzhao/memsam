@@ -418,7 +418,7 @@ def main():
     parser.add_argument(
         "--output_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/outputs/score_multiobj",
+        default="/projects/bdnb/dzhao3/outputs/score_multiobj_dispersed",
         help="directory to save the output masks (as PNG files)",
     )
     parser.add_argument(
@@ -498,7 +498,7 @@ def main():
     # video_names = ['MKnlVo6x', 'dtHbJvYy', '7K7WVzGG', 'KfcCU1ma', 'ScFTYisJ', 'xpI7xRWN',
     #                '48f9Llhg', 'f4DjwV55', 'raql9H7f', 'EWCZAcdt', ]
     video_names = video_names[::-1]
-    desired_videos = ['9mBuSvT2']
+    desired_videos = ['D4AgqLQL']
     for n_video, video_name in enumerate(video_names):
         finished_videos = [
             p
@@ -506,7 +506,7 @@ def main():
             if os.path.isdir(os.path.join(args.output_mask_dir, p))
         ] + ['d83wYdy0']
         if video_name in finished_videos and video_name not in desired_videos:
-        # if video_name in ['d83wYdy0']:
+        # if video_name in ['d83wYdy0', 'x3nD3QQ9']:
         # if video_name not in ['EWCZAcdt']:
         # if video_name not in ['cUD1dwuP']:
             print("Skipping", video_name)

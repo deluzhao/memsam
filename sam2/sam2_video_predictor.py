@@ -797,7 +797,6 @@ class SAM2VideoPredictor(SAM2Base):
                         else:
                             object_mem_score = output_dict[storage_key][frame_idx]["object_mem_score"].detach()
                             used_mem_score = object_mem_score.clone()
-                            used_mem_score[:,0] = 10
                             values, indices = torch.topk(used_mem_score, self.num_maskmem)
                             used_mem_score = torch.zeros_like(used_mem_score).scatter(-1, indices, 1)
                             for obj in range(len(obj_ids)):
@@ -843,6 +842,8 @@ class SAM2VideoPredictor(SAM2Base):
                         print("Scores:", current_out["object_mem_score"])
                         print("Loss:", loss.sum() / len(obj_ids))
                     current_out["object_mem_score"] = torch.clamp(current_out["object_mem_score"], min=0).requires_grad_(True)
+                    if torch.max(torch.abs(grad_input)) < 1e-6:
+                        i = i+10
                     # loss.backward(retain_graph=(i < grad_iter - 1))
                     # optimizer.step()
                     # optimizer.zero_grad()
