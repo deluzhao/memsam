@@ -754,7 +754,7 @@ class SAM2Base(torch.nn.Module):
                     if t_pos == 0:
                         t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - 1]
                     elif len(chosen_frames) > self.num_maskmem - 1:
-                        multiplier = (len(chosen_frames)+1) / (self.num_maskmem - 1)
+                        multiplier = len(chosen_frames) / (self.num_maskmem - 1)
                         pos_idx = self.num_maskmem - (t_pos+1) / multiplier - 1
                         lower, upper = math.floor(pos_idx), math.ceil(pos_idx)
                         diff = pos_idx - lower
