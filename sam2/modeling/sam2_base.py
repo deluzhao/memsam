@@ -742,7 +742,8 @@ class SAM2Base(torch.nn.Module):
                         if object_mem_score.requires_grad or object_mem_score[0, t_pos] > 0:
                             chosen_frames.append(prev_frame_idx)
                             t_pos_and_prevs.append((t_pos, out))
-
+                if not object_mem_score.requires_grad:
+                    print("Frames", chosen_frames)
                 # if ref_frames == 2 * self.num_maskmem and len(chosen_frames) < 2 * self.num_maskmem - len(selected_cond_outputs.values()):
                 #     print(f"Incorrect Frames {frame_idx}:", chosen_frames)
                 non_cond_rel_tpos = 1

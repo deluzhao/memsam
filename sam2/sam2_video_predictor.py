@@ -791,7 +791,7 @@ class SAM2VideoPredictor(SAM2Base):
                         object_mem_score = output_dict[storage_key][frame_idx]["object_mem_score"]
                         used_mem_score = object_mem_score
                     else:
-                        if frame_idx - start_frame_idx <= num_mem:
+                        if frame_idx - start_frame_idx <= self.num_maskmem:
                             object_mem_score = torch.ones(1, num_mem * 2, device=device)
                             used_mem_score = object_mem_score
                         elif loss < 0.99:
@@ -849,7 +849,7 @@ class SAM2VideoPredictor(SAM2Base):
                 elif frame_mask is not None and i == grad_iter:
                     current_out["object_mem_score"] = current_out["object_mem_score"].detach()
                     loss = dice_loss(video_res_masks.squeeze(1), frame_mask, len(obj_ids))
-                    # print("Final Loss:", loss)
+                    print("Final Loss:", loss)
                 elif frame_mask is None:
                     i = grad_iter+2
 

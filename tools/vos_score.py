@@ -418,7 +418,7 @@ def main():
     parser.add_argument(
         "--output_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/outputs/score",
+        default="/projects/bdnb/dzhao3/outputs/debug",
         help="directory to save the output masks (as PNG files)",
     )
     parser.add_argument(
@@ -504,9 +504,9 @@ def main():
             for p in os.listdir(args.output_mask_dir)
             if os.path.isdir(os.path.join(args.output_mask_dir, p))
         ] + ['d83wYdy0']
-        if video_name in finished_videos:
+        # if video_name in finished_videos:
         # if video_name in ['d83wYdy0']:
-        # if video_name not in ['D4AgqLQL']:
+        if video_name not in ['v3uNUctx']:
         # if video_name not in ['gdqCcvs2', '9mBuSvT2', 'FiRTBMg2']:
             print("Skipping", video_name)
             continue
