@@ -231,14 +231,14 @@ def vos_inference(
         }
         video_segments[out_frame_idx] = per_obj_output_mask
 
-    scores = {}
-    try:
-        for k in inference_state["output_dict"]["non_cond_frame_outputs"].keys():
-            scores[k] = inference_state["output_dict"]["non_cond_frame_outputs"][k].get("object_mem_score", None)
-        print("Attempting to save to", os.path.join(video_dir, "scores.pt"))
-        torch.save(scores, os.path.join(video_dir, "scores.pt"))
-    except:
-        print("Failed", scores.keys())
+    # scores = {}
+    # try:
+    #     for k in inference_state["output_dict"]["non_cond_frame_outputs"].keys():
+    #         scores[k] = inference_state["output_dict"]["non_cond_frame_outputs"][k].get("object_mem_score", None)
+    #     print("Attempting to save to", os.path.join(video_dir, "scores.pt"))
+    #     torch.save(scores, os.path.join(video_dir, "scores.pt"))
+    # except:
+    #     print("Failed", scores.keys())
     # write the output masks as palette PNG files to output_mask_dir
     for out_frame_idx, per_obj_output_mask in video_segments.items():
         save_masks_to_dir(
@@ -418,7 +418,7 @@ def main():
     parser.add_argument(
         "--output_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/outputs/score_default",
+        default="/projects/bdnb/dzhao3/outputs/score",
         help="directory to save the output masks (as PNG files)",
     )
     parser.add_argument(
@@ -504,10 +504,10 @@ def main():
             for p in os.listdir(args.output_mask_dir)
             if os.path.isdir(os.path.join(args.output_mask_dir, p))
         ] + ['d83wYdy0']
-        # if video_name in finished_videos:
+        if video_name in finished_videos:
         # if video_name in ['d83wYdy0']:
-        # if video_name not in ['EWCZAcdt']:
-        if video_name not in ['gdqCcvs2', '9mBuSvT2', 'FiRTBMg2']:
+        # if video_name not in ['D4AgqLQL']:
+        # if video_name not in ['gdqCcvs2', '9mBuSvT2', 'FiRTBMg2']:
             print("Skipping", video_name)
             continue
         print(f"\n{n_video + 1}/{len(video_names)} - running on {video_name}")

@@ -783,7 +783,7 @@ class SAM2VideoPredictor(SAM2Base):
                     storage_key = "non_cond_frame_outputs"
 
                     if i == 0:
-                        num_mem = min(self.num_maskmem * 2, frame_idx - start_frame_idx)
+                        num_mem = min(self.num_maskmem * 2 - 1, frame_idx - start_frame_idx)
                         object_mem_score = torch.ones(1, num_mem * 2, device=device).to(torch.bfloat16).requires_grad_(True)
                         used_mem_score = object_mem_score
                         # optimizer = torch.optim.Adam([object_mem_score], lr=1)
