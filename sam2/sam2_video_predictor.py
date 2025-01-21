@@ -849,7 +849,7 @@ class SAM2VideoPredictor(SAM2Base):
                 elif frame_mask is not None and i == grad_iter:
                     current_out["object_mem_score"] = current_out["object_mem_score"].detach()
                     loss = dice_loss(video_res_masks.squeeze(1), frame_mask, len(obj_ids))
-                    print("Final Loss:", loss)
+                    # print("Final Loss:", loss)
                 elif frame_mask is None:
                     i = grad_iter+2
 

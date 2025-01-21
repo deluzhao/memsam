@@ -742,11 +742,11 @@ class SAM2Base(torch.nn.Module):
                         if object_mem_score.requires_grad or object_mem_score[0, t_pos] > 0:
                             chosen_frames.append(prev_frame_idx)
                             t_pos_and_prevs.append((t_pos, out))
-                if not object_mem_score.requires_grad:
-                    print("Frames", chosen_frames)
+                # if not object_mem_score.requires_grad:
+                #     print("Frames", chosen_frames)
                 # if ref_frames == 2 * self.num_maskmem and len(chosen_frames) < 2 * self.num_maskmem - len(selected_cond_outputs.values()):
                 #     print(f"Incorrect Frames {frame_idx}:", chosen_frames)
-                non_cond_rel_tpos = 1
+                # non_cond_rel_tpos = 1
                 for t_pos, prev in t_pos_and_prevs:
                     
                     if prev is None:
@@ -760,24 +760,30 @@ class SAM2Base(torch.nn.Module):
                     maskmem_enc = maskmem_enc.flatten(2).permute(2, 0, 1)
                     
                     # only supporting one conditional frame
-                    exclude_cond = 1
-                    if (object_mem_score[0, t_pos] > 0):
-                        exclude_cond = 0
+                    # exclude_cond = 1
+                    # if (object_mem_score[0, t_pos] > 0):
+                    #     exclude_cond = 0
 
                     # Temporal positional encoding
-                    if t_pos == 0:
-                        t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - t_pos - 1]
+                    # if t_pos == 0:
+                    #     t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - t_pos - 1]
     
-                    elif len(t_pos_and_prevs) - exclude_cond >= self.num_maskmem:
-                        rel_pos = non_cond_rel_tpos / (len(t_pos_and_prevs) - exclude_cond) * (self.num_maskmem - 1)
-                        pos_idx = self.num_maskmem - rel_pos - 1
-                        lower, upper = math.floor(pos_idx), math.ceil(pos_idx)
-                        diff = pos_idx - lower
-                        t_pos_enc = self.maskmem_tpos_enc[lower] * (1 - diff) + self.maskmem_tpos_enc[upper] * diff
-                        non_cond_rel_tpos += 1
-                    else:
-                        t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - non_cond_rel_tpos - 1]
-                        non_cond_rel_tpos += 1
+                    # elif len(t_pos_and_prevs) - exclude_cond >= self.num_maskmem:
+                    #     rel_pos = non_cond_rel_tpos / (len(t_pos_and_prevs) - exclude_cond) * (self.num_maskmem - 1)
+                    #     pos_idx = self.num_maskmem - rel_pos - 1
+                    #     lower, upper = math.floor(pos_idx), math.ceil(pos_idx)
+                    #     diff = pos_idx - lower
+                    #     t_pos_enc = self.maskmem_tpos_enc[lower] * (1 - diff) + self.maskmem_tpos_enc[upper] * diff
+                    #     non_cond_rel_tpos += 1
+                    # else:
+                    #     t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - non_cond_rel_tpos - 1]
+                    #     non_cond_rel_tpos += 1
+
+                    tpos_enc_idx = self.num_maskmem - t_pos - 1
+                    if tpos_enc_idx < 0:
+                        tpos_enc_idx = 0
+                    
+                    t_pos_enc = self.maskmem_tpos_enc[tpos_enc_idx]
 
                     to_cat_memory_pos_embed.append(maskmem_enc + t_pos_enc)
             else:
