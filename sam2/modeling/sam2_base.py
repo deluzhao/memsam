@@ -136,7 +136,11 @@ class SAM2Base(torch.nn.Module):
         self.maskmem_tpos_enc = torch.nn.Parameter(
             torch.zeros(num_maskmem, 1, 1, self.mem_dim)
         )
+        self.maskmem_tpos_enc_old = torch.nn.Parameter(
+            torch.zeros(1, 1, self.mem_dim)
+        )
         trunc_normal_(self.maskmem_tpos_enc, std=0.02)
+        trunc_normal_(self.maskmem_tpos_enc_old, std=0.02)
         # a single token to indicate no memory embedding from previous frames
         self.no_mem_embed = torch.nn.Parameter(torch.zeros(1, 1, self.hidden_dim))
         self.no_mem_pos_enc = torch.nn.Parameter(torch.zeros(1, 1, self.hidden_dim))
@@ -781,9 +785,9 @@ class SAM2Base(torch.nn.Module):
 
                     tpos_enc_idx = self.num_maskmem - t_pos - 1
                     if tpos_enc_idx < 0:
-                        tpos_enc_idx = 0
-                    
-                    t_pos_enc = self.maskmem_tpos_enc[tpos_enc_idx]
+                        t_pos_enc = self.maskmem_tpos_enc_old
+                    else:
+                        t_pos_enc = self.maskmem_tpos_enc[tpos_enc_idx]
 
                     to_cat_memory_pos_embed.append(maskmem_enc + t_pos_enc)
             else:
@@ -828,15 +832,13 @@ class SAM2Base(torch.nn.Module):
                 #     )
                 #     if out is not None:
                 #         pos_and_ptrs.append((t_diff, out["obj_ptr"]))
-                t_diff = 1
                 for chosen_frame_idx in chosen_frames:
                     out = output_dict["non_cond_frame_outputs"].get(
                         chosen_frame_idx, unselected_cond_outputs.get(chosen_frame_idx, None)
                     )
                     
                     if out is not None:
-                        pos_and_ptrs.append((t_diff, out["obj_ptr"]))
-                    t_diff += 1
+                        pos_and_ptrs.append((frame_idx - chosen_frame_idx, out["obj_ptr"]))
                 
                 # If we have at least one object pointer, add them to the across attention
                 if len(pos_and_ptrs) > 0:

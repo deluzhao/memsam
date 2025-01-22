@@ -392,7 +392,8 @@ def main():
     parser.add_argument(
         "--sam2_checkpoint",
         type=str,
-        default="/work/hdd/bdnb/dzhao3/memsam/checkpoints/sam2.1_hiera_large.pt",
+        # default="/work/hdd/bdnb/dzhao3/memsam/checkpoints/sam2.1_hiera_large.pt",
+        default="/work/hdd/bdnb/dzhao3/memsam/sam2_logs/configs/sam2.1_training/tpos.yaml/checkpoints/checkpoint.pt",
         help="path to the SAM 2 model checkpoint",
     )
     parser.add_argument(
@@ -418,7 +419,7 @@ def main():
     parser.add_argument(
         "--output_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/outputs/score_static_enc",
+        default="/projects/bdnb/dzhao3/outputs/score_general",
         help="directory to save the output masks (as PNG files)",
     )
     parser.add_argument(
