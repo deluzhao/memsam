@@ -14,7 +14,6 @@ from sam2.modeling.sam.mask_decoder import MaskDecoder
 from sam2.modeling.sam.prompt_encoder import PromptEncoder
 from sam2.modeling.sam.transformer import TwoWayTransformer
 from sam2.modeling.sam2_utils import get_1d_sine_pe, MLP, select_closest_cond_frames
-
 from collections import defaultdict
 import math
 
@@ -136,7 +135,11 @@ class SAM2Base(torch.nn.Module):
         self.maskmem_tpos_enc = torch.nn.Parameter(
             torch.zeros(num_maskmem, 1, 1, self.mem_dim)
         )
+        self.maskmem_tpos_enc_old = torch.nn.Parameter(
+            torch.zeros(1, 1, self.mem_dim)
+        )
         trunc_normal_(self.maskmem_tpos_enc, std=0.02)
+        trunc_normal_(self.maskmem_tpos_enc_old, std=0.02)
         # a single token to indicate no memory embedding from previous frames
         self.no_mem_embed = torch.nn.Parameter(torch.zeros(1, 1, self.hidden_dim))
         self.no_mem_pos_enc = torch.nn.Parameter(torch.zeros(1, 1, self.hidden_dim))
@@ -695,14 +698,16 @@ class SAM2Base(torch.nn.Module):
             )
 
             if self.training:
+                chosen_frames = []
                 t_pos_and_prevs = [(0, out) for out in selected_cond_outputs.values()]
                 # Add last (self.num_maskmem - 1) frames before current frame for non-conditioning memory
                 # the earliest one has t_pos=1 and the latest one has t_pos=self.num_maskmem-1
                 # We also allow taking the memory frame non-consecutively (with stride>1), in which case
                 # we take (self.num_maskmem - 2) frames among every stride-th frames plus the last frame.
                 stride = 1 if self.training else self.memory_temporal_stride_for_eval
-                for t_pos in range(1, self.num_maskmem):
-                    t_rel = self.num_maskmem - t_pos  # how many frames before current frame
+                candidate_frames = self.num_maskmem * 2
+                for t_pos in range(1, candidate_frames):
+                    t_rel = candidate_frames - t_pos  # how many frames before current frame
                     if t_rel == 1:
                         # for t_rel == 1, we take the last frame (regardless of r)
                         if not track_in_reverse:
@@ -730,17 +735,14 @@ class SAM2Base(torch.nn.Module):
                         # If an unselected conditioning frame is among the last (self.num_maskmem - 1)
                         # frames, we still attend to it as if it's a non-conditioning frame.
                         out = unselected_cond_outputs.get(prev_frame_idx, None)
-                    t_pos_and_prevs.append((t_pos, out))
 
-                # random dropout of frames (excluding selected_cond) for robustness of fused memory
-                drop_frame = False
-                if self.training:
-                    non_padding = [i for i in range(len(t_pos_and_prevs)) if t_pos_and_prevs[i][1] is not None]
-                    drop_frame = (len(non_padding) > self.num_maskmem) and (torch.rand(1) < 0.25)
+                    if out is not None:
+                        t_pos_and_prevs.append((t_pos, out))
+                        chosen_frames.append(prev_frame_idx)
 
-                for i, (t_pos, prev) in enumerate(t_pos_and_prevs):
+                for t_pos, prev in t_pos_and_prevs:
                     
-                    if prev is None or (drop_frame and non_padding[torch.randint(low=len(selected_cond_outputs), high=len(non_padding), size=(1,))] == i):
+                    if prev is None:
                         continue  # skip padding frames
                     # "maskmem_features" might have been offloaded to CPU in demo use cases,
                     # so we load it back to GPU (it's a no-op if it's already on GPU).
@@ -750,9 +752,15 @@ class SAM2Base(torch.nn.Module):
                     maskmem_enc = prev["maskmem_pos_enc"][-1].to(device)
                     maskmem_enc = maskmem_enc.flatten(2).permute(2, 0, 1)
                     # Temporal positional encoding
-                    maskmem_enc = (
-                        maskmem_enc + self.maskmem_tpos_enc[self.num_maskmem - t_pos - 1]
-                    )
+                    tpos_enc_idx = self.num_maskmem - t_pos - 1
+                    if tpos_enc_idx < 0:
+                        maskmem_enc = (
+                            maskmem_enc + self.maskmem_tpos_enc_old
+                        )
+                    else:
+                        maskmem_enc = (
+                            maskmem_enc + self.maskmem_tpos_enc[tpos_enc_idx]
+                        )
                     to_cat_memory_pos_embed.append(maskmem_enc)
             else:
                 to_cat_memory, to_cat_memory_pos_embed, chosen_frames = self._score_and_select_memory(frame_idx, output_dict, 
@@ -793,15 +801,13 @@ class SAM2Base(torch.nn.Module):
                 #     )
                 #     if out is not None:
                 #         pos_and_ptrs.append((t_diff, out["obj_ptr"]))
-                t_diff = 1
-                for frame_idx in chosen_frames:
+                for prev_frame_idx in chosen_frames:
                     
                     out = output_dict["non_cond_frame_outputs"].get(
-                        frame_idx, unselected_cond_outputs.get(frame_idx, None)
+                        prev_frame_idx, unselected_cond_outputs.get(prev_frame_idx, None)
                     )
                     if out is not None:
-                        pos_and_ptrs.append((t_diff, out["obj_ptr"]))
-                    t_diff += 1
+                        pos_and_ptrs.append((frame_idx - prev_frame_idx, out["obj_ptr"]))
                 # If we have at least one object pointer, add them to the across attention
                 if len(pos_and_ptrs) > 0:
                     pos_list, ptrs_list = zip(*pos_and_ptrs)
