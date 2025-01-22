@@ -106,7 +106,7 @@ class SAM2Train(SAM2Base):
         #         p.requires_grad = False
         for p in self.image_encoder.parameters():
             p.requires_grad = False
-        for p in self.memory_encoder.parameters():
+        for p in self.memory_attention.parameters():
             p.requires_grad = False
 
         
@@ -298,6 +298,9 @@ class SAM2Train(SAM2Base):
             "cond_frame_outputs": {},  # dict containing {frame_idx: <out>}
             "non_cond_frame_outputs": {},  # dict containing {frame_idx: <out>}
         }
+
+        # initialize hidden
+        self.memory_encoder.set_hidden(None)
 
         for stage_id in processing_order:
             # Get the image features for the current frames
