@@ -622,31 +622,15 @@ class SAM2Base(torch.nn.Module):
                 )
             # non-cond frame
             else:
-                if len(chosen_frames) > 1:
-                    if interp == "linear" and len(chosen_frames) < self.num_maskmem - 1:
-                        t_pos_enc = self.maskmem_tpos_enc[t - l]
-                    else:
-                        # temporal encoding scaling methods
-                        if interp == "temporal":
-                            t_pos = (frame_idx - r - idx) / (frame_idx - r - chosen_frames[-1]) * (self.num_maskmem - 2)
-                        elif interp == "linear":
-                            t_pos = (t - l) / (len(t_pos_and_prevs) - l - 1) * (self.num_maskmem - 2)
-                        elif interp == "minmax":
-                            t_pos = (chosen_frames[0] - idx) / (chosen_frames[0] - chosen_frames[-1]) * (self.num_maskmem - 2)
-                        
-                        # allow for averages of temporal encodings or not
-                        if hybrid:
-                            lower, upper = math.floor(t_pos), math.ceil(t_pos)
-                            diff = t_pos - lower
-                            t_pos_enc = self.maskmem_tpos_enc[lower] * (1 - diff) + self.maskmem_tpos_enc[upper] * diff
-                        else:
-                            t_pos_enc = self.maskmem_tpos_enc[round(t_pos)]
+                tpos_enc_idx = self.num_maskmem - t_pos - 1
+                if tpos_enc_idx >= len(self.maskmem_tpos_enc):
+                    maskmem_enc = (
+                        maskmem_enc + self.maskmem_tpos_enc_old
+                    )
                 else:
-                    t_pos_enc = self.maskmem_tpos_enc[0]
-
-                maskmem_enc = (
-                    maskmem_enc + t_pos_enc
-                )
+                    maskmem_enc = (
+                        maskmem_enc + self.maskmem_tpos_enc[tpos_enc_idx]
+                    )
             
             for i in range(n):
                 if objs is None or objs[i] == 1:
