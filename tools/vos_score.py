@@ -231,14 +231,18 @@ def vos_inference(
         }
         video_segments[out_frame_idx] = per_obj_output_mask
 
-    # scores = {}
-    # try:
-    #     for k in inference_state["output_dict"]["non_cond_frame_outputs"].keys():
-    #         scores[k] = inference_state["output_dict"]["non_cond_frame_outputs"][k].get("object_mem_score", None)
-    #     print("Attempting to save to", os.path.join(video_dir, "scores.pt"))
-    #     torch.save(scores, os.path.join(video_dir, "scores.pt"))
-    # except:
-    #     print("Failed", scores.keys())
+    scores = {}
+    try:
+        for k in inference_state["output_dict"]["non_cond_frame_outputs"].keys():
+            scores[k] = inference_state["output_dict"]["non_cond_frame_outputs"][k].get("object_mem_score", None)
+        print("Attempting to save to", os.path.join(
+            output_mask_dir, video_name, "scores.pt"
+        ))
+        torch.save(scores, os.path.join(
+            output_mask_dir, video_name, "scores.pt"
+        ))
+    except:
+        print("Failed", scores.keys())
     # write the output masks as palette PNG files to output_mask_dir
     for out_frame_idx, per_obj_output_mask in video_segments.items():
         save_masks_to_dir(
@@ -392,8 +396,8 @@ def main():
     parser.add_argument(
         "--sam2_checkpoint",
         type=str,
-        # default="/work/hdd/bdnb/dzhao3/memsam/checkpoints/sam2.1_hiera_large.pt",
-        default="/work/hdd/bdnb/dzhao3/memsam/sam2_logs/configs/sam2.1_training/tpos.yaml/checkpoints/checkpoint.pt",
+        default="/work/hdd/bdnb/dzhao3/memsam/checkpoints/sam2.1_hiera_large.pt",
+        # default="/work/hdd/bdnb/dzhao3/memsam/sam2_logs/configs/sam2.1_training/tpos.yaml/checkpoints/checkpoint.pt",
         help="path to the SAM 2 model checkpoint",
     )
     parser.add_argument(
@@ -419,7 +423,7 @@ def main():
     parser.add_argument(
         "--output_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/outputs/score_general",
+        default="/projects/bdnb/dzhao3/outputs/score_cache",
         help="directory to save the output masks (as PNG files)",
     )
     parser.add_argument(
@@ -484,7 +488,7 @@ def main():
             p
             for p in os.listdir(args.base_video_dir)
             if os.path.isdir(os.path.join(args.base_video_dir, p))
-        ][::-1]
+        ]
     print(f"running VOS prediction on {len(video_names)} videos:\n{video_names}")
 
     if not os.path.exists(args.output_mask_dir):
@@ -498,14 +502,14 @@ def main():
     print(f"finished videos: {finished_videos}")
     # video_names = ['MKnlVo6x', 'dtHbJvYy', '7K7WVzGG', 'KfcCU1ma', 'ScFTYisJ', 'xpI7xRWN',
     #                '48f9Llhg', 'f4DjwV55', 'raql9H7f', 'EWCZAcdt']
-    video_names = video_names[::-1]
+    video_names = video_names
     for n_video, video_name in enumerate(video_names):
         finished_videos = [
             p
             for p in os.listdir(args.output_mask_dir)
             if os.path.isdir(os.path.join(args.output_mask_dir, p))
         ] + ['d83wYdy0']
-        if video_name in finished_videos:
+        if video_name in finished_videos and video_name not in ['vJ8W2TO5', 'JGG6MrhF']:
         # if video_name in ['d83wYdy0']:
         # if video_name not in ['v3uNUctx']:
         # if video_name not in ['gdqCcvs2', '9mBuSvT2', 'FiRTBMg2']:

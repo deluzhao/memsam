@@ -749,7 +749,10 @@ class SAM2VideoPredictor(SAM2Base):
             processing_order = range(start_frame_idx, end_frame_idx + 1)
 
         device = "cuda:0"
-
+        frame_usage = torch.zeros(len(processing_order), device=device)
+        frame_score = torch.zeros(len(processing_order), device=device)
+        output_dict['frame_usage'] = frame_usage
+        output_dict['frame_score'] = frame_score
         for frame_idx in tqdm(processing_order, desc="propagate in video"):
             # We skip those frames already in consolidated outputs (these are frames
             # that received input clicks or mask). Note that we cannot directly run
@@ -783,8 +786,8 @@ class SAM2VideoPredictor(SAM2Base):
                     storage_key = "non_cond_frame_outputs"
 
                     if i == 0:
-                        num_mem = min(self.num_maskmem * 2 - 1, frame_idx - start_frame_idx)
-                        object_mem_score = torch.ones(1, num_mem * 2, device=device).to(torch.bfloat16).requires_grad_(True)
+                        num_mem = min(self.num_maskmem, frame_idx - start_frame_idx)
+                        object_mem_score = torch.ones(1, num_mem, device=device).to(torch.bfloat16).requires_grad_(True)
                         used_mem_score = object_mem_score
                         # optimizer = torch.optim.Adam([object_mem_score], lr=1)
                     elif i < grad_iter:
@@ -792,20 +795,41 @@ class SAM2VideoPredictor(SAM2Base):
                         used_mem_score = object_mem_score
                     else:
                         if frame_idx - start_frame_idx <= self.num_maskmem:
-                            object_mem_score = torch.ones(1, num_mem * 2, device=device)
+                            object_mem_score = torch.ones(1, num_mem, device=device)
                             used_mem_score = object_mem_score
+
+                            # for frame caching
+                            frame_score[:frame_idx] += object_mem_score[0][:num_mem]
+                            frame_usage[:frame_idx] += 1
                         elif loss < 0.99:
                             object_mem_score = output_dict[storage_key][frame_idx]["object_mem_score"].detach()
                             used_mem_score = object_mem_score.clone()
-                            values, indices = torch.topk(used_mem_score[:,:used_mem_score.shape[1] // 2], self.num_maskmem)
+                            _, indices = torch.topk(used_mem_score[:,:used_mem_score.shape[1] // 2], self.num_maskmem)
                             used_mem_score = torch.zeros_like(used_mem_score)
                             used_mem_score[:,indices] = 1
+
+                            # for frame caching
+                            avg_scores = frame_score / frame_usage
+                            avg_scores[avg_scores != avg_scores] = 0
+                            k = min(self.num_maskmem, frame_idx - self.num_maskmem)
+                            _, indices = torch.topk(avg_scores[1:frame_idx - self.num_maskmem+1], k)
+                            indices += 1
+                            all_indices = torch.cat([
+                                torch.zeros(1, device=device), 
+                                torch.arange(frame_idx - self.num_maskmem + 1, frame_idx, device=device), 
+                                indices]).long()
+                            frame_score[all_indices] += object_mem_score[0][:num_mem]
+                            frame_usage[all_indices] += 1
+
+                            print("Indices:", all_indices)
                         else:
-                            object_mem_score = torch.zeros(1, num_mem * 2, device=device)
-                            object_mem_score[:,self.num_maskmem+1:num_mem] = 1
-                            object_mem_score[:,0] = 1
+                            object_mem_score = torch.zeros(1, num_mem, device=device)
+                            # object_mem_score[:,self.num_maskmem+1:num_mem] = 1
+                            # object_mem_score[:,0] = 1
+                            object_mem_score[:,:self.num_maskmem] = 1
                             used_mem_score = object_mem_score
-                        # print("Final Scores:", used_mem_score.detach())
+
+                        print("Final Scores:", used_mem_score.detach())
 
                     current_out, pred_masks = self._run_single_frame_inference(
                         inference_state=inference_state,
@@ -849,7 +873,8 @@ class SAM2VideoPredictor(SAM2Base):
                 elif frame_mask is not None and i == grad_iter:
                     current_out["object_mem_score"] = current_out["object_mem_score"].detach()
                     loss = dice_loss(video_res_masks.squeeze(1), frame_mask, len(obj_ids))
-                    # print("Final Loss:", loss)
+                    current_out["loss"] = loss
+                    print("Final Loss:", loss)
                 elif frame_mask is None:
                     i = grad_iter+2
 

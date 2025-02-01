@@ -136,11 +136,11 @@ class SAM2Base(torch.nn.Module):
         self.maskmem_tpos_enc = torch.nn.Parameter(
             torch.zeros(num_maskmem, 1, 1, self.mem_dim)
         )
-        self.maskmem_tpos_enc_old = torch.nn.Parameter(
-            torch.zeros(1, 1, self.mem_dim)
-        )
+        # self.maskmem_tpos_enc_old = torch.nn.Parameter(
+        #     torch.zeros(1, 1, self.mem_dim)
+        # )
         trunc_normal_(self.maskmem_tpos_enc, std=0.02)
-        trunc_normal_(self.maskmem_tpos_enc_old, std=0.02)
+        # trunc_normal_(self.maskmem_tpos_enc_old, std=0.02)
         # a single token to indicate no memory embedding from previous frames
         self.no_mem_embed = torch.nn.Parameter(torch.zeros(1, 1, self.hidden_dim))
         self.no_mem_pos_enc = torch.nn.Parameter(torch.zeros(1, 1, self.hidden_dim))
@@ -711,7 +711,7 @@ class SAM2Base(torch.nn.Module):
                 # We also allow taking the memory frame non-consecutively (with stride>1), in which case
                 # we take (self.num_maskmem - 2) frames among every stride-th frames plus the last frame.
                 stride = 1 if self.training else self.memory_temporal_stride_for_eval
-                ref_frames = object_mem_score.shape[1] // 2
+                ref_frames = min(self.num_maskmem, object_mem_score.shape[1])
                 for t_pos in range(1, ref_frames):
                     t_rel = ref_frames - t_pos  # how many frames before current frame
                     if t_rel == 1:
@@ -746,6 +746,33 @@ class SAM2Base(torch.nn.Module):
                         if object_mem_score.requires_grad or object_mem_score[0, t_pos] > 0:
                             chosen_frames.append(prev_frame_idx)
                             t_pos_and_prevs.append((t_pos, out))
+                
+                # assumes start_frame_idx is 0
+                if frame_idx > self.num_maskmem:
+                    frame_score = output_dict["frame_score"]
+                    frame_usage = output_dict["frame_usage"]
+                    avg_scores = frame_score / frame_usage
+                    avg_scores[avg_scores != avg_scores] = 0
+                    k = min(self.num_maskmem, frame_idx - self.num_maskmem)
+                    _, indices = torch.topk(avg_scores[1:frame_idx - self.num_maskmem+1], k)
+                    t_pos = ref_frames
+                    for i in range(len(indices)):
+                        prev_frame_idx = indices[i].item() + 1
+                        out = output_dict["non_cond_frame_outputs"].get(prev_frame_idx, None)
+                        if out is None:
+                            # If an unselected conditioning frame is among the last (self.num_maskmem - 1)
+                            # frames, we still attend to it as if it's a non-conditioning frame.
+                            out = unselected_cond_outputs.get(prev_frame_idx, None)
+
+                        if out is not None:
+                            if object_mem_score.requires_grad or object_mem_score[0, t_pos] > 0:
+                                chosen_frames.append(prev_frame_idx)
+                                t_pos_and_prevs.append((-1, out))
+                        
+                        t_pos += 1
+                    # print("BRUH", indices, chosen_frames)
+
+
                 # if not object_mem_score.requires_grad:
                 #     print("Frames", chosen_frames)
                 # if ref_frames == 2 * self.num_maskmem and len(chosen_frames) < 2 * self.num_maskmem - len(selected_cond_outputs.values()):
@@ -783,9 +810,11 @@ class SAM2Base(torch.nn.Module):
                     #     t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - non_cond_rel_tpos - 1]
                     #     non_cond_rel_tpos += 1
 
-                    tpos_enc_idx = self.num_maskmem - t_pos - 1
-                    if tpos_enc_idx < 0:
-                        t_pos_enc = self.maskmem_tpos_enc_old
+                    tpos_enc_idx = ref_frames - t_pos - 1
+                    if t_pos == 0:
+                        t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - 1]
+                    elif tpos_enc_idx >= self.num_maskmem - 1:
+                        t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - 2]
                     else:
                         t_pos_enc = self.maskmem_tpos_enc[tpos_enc_idx]
 
