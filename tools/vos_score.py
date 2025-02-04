@@ -94,31 +94,31 @@ def save_masks_to_dir(
 ):
     """Save masks to a directory as PNG files."""
     os.makedirs(os.path.join(output_mask_dir, video_name), exist_ok=True)
-    if not per_obj_png_file:
+    # if not per_obj_png_file:
 
-        output_mask = put_per_obj_mask(per_obj_output_mask, height, width)
-        output_mask_path = os.path.join(
-            output_mask_dir, video_name, f"{frame_name}.png"
-        )
+    #     output_mask = put_per_obj_mask(per_obj_output_mask, height, width)
+    #     output_mask_path = os.path.join(
+    #         output_mask_dir, video_name, f"{frame_name}.png"
+    #     )
 
-        save_ann_png(output_mask_path, output_mask, output_palette)
-    if True:
-        frame_path = os.path.join(video_dir, f"{frame_name}.jpg")
-        frame = cv2.imread(frame_path)
-        if frame is None:
-            raise ValueError(f"The frame at {frame_path} could not be loaded.")
-        combined_mask = np.zeros_like(frame[:,:,0], dtype=np.uint8)
-        for object_id, mask in per_obj_output_mask.items():
-            if mask.ndim == 3 and mask.shape[0] == 1:
-                mask = mask[0]
-            color = color_map[object_id]
-            mask_indices = np.where(mask == 1)
-            combined_mask[mask_indices] = 255
-            frame[mask_indices[0], mask_indices[1], :] = 0.4 * frame[mask_indices[0], mask_indices[1], :] + 0.6 * np.array(color)
-        save_folder = os.path.join("/projects/bdnb/dzhao3/vis/", output_mask_dir.split("/")[-1], video_name)
-        if not os.path.exists(save_folder):
-            os.makedirs(save_folder)
-        cv2.imwrite(os.path.join(save_folder, f"{frame_name}.png"), frame)
+    #     save_ann_png(output_mask_path, output_mask, output_palette)
+
+    frame_path = os.path.join(video_dir, f"{frame_name}.jpg")
+    frame = cv2.imread(frame_path)
+    if frame is None:
+        raise ValueError(f"The frame at {frame_path} could not be loaded.")
+    combined_mask = np.zeros_like(frame[:,:,0], dtype=np.uint8)
+    for object_id, mask in per_obj_output_mask.items():
+        if mask.ndim == 3 and mask.shape[0] == 1:
+            mask = mask[0]
+        color = color_map[object_id]
+        mask_indices = np.where(mask == 1)
+        combined_mask[mask_indices] = 255
+        frame[mask_indices[0], mask_indices[1], :] = 0.4 * frame[mask_indices[0], mask_indices[1], :] + 0.6 * np.array(color)
+    save_folder = os.path.join("/work/nvme/bdnb/dzhao3/vis/", output_mask_dir.split("/")[-1], video_name)
+    if not os.path.exists(save_folder):
+        os.makedirs(save_folder)
+    cv2.imwrite(os.path.join(save_folder, f"{frame_name}.png"), frame)
 
 
 # @torch.inference_mode()
@@ -222,6 +222,8 @@ def vos_inference(
         param.requires_grad = False
 
     
+    scores = defaultdict(dict)
+
     for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
         inference_state, masks
     ):
@@ -231,27 +233,38 @@ def vos_inference(
         }
         video_segments[out_frame_idx] = per_obj_output_mask
 
-    scores = {}
+        scores[out_frame_idx]["mask"] = out_mask_logits
+
+    bad_frames = 0
     try:
         for k in inference_state["output_dict"]["non_cond_frame_outputs"].keys():
-            scores[k] = inference_state["output_dict"]["non_cond_frame_outputs"][k].get("object_mem_score", None)
-        print("Attempting to save to", os.path.join(video_dir, "scores.pt"))
-        torch.save(scores, os.path.join(video_dir, "scores.pt"))
+            scores[k]["score"] = inference_state["output_dict"]["non_cond_frame_outputs"][k].get("object_mem_score", None)
+            scores[k]["loss"] = inference_state["output_dict"]["non_cond_frame_outputs"][k].get("loss", None)
+            if scores[k]["loss"] is not None and scores[k]["loss"] > 0.95:
+                bad_frames += 1
+        print("Attempting to save to", os.path.join(
+            output_mask_dir, video_name, "scores.pt"
+        ))
+        torch.save(scores, os.path.join(
+            output_mask_dir, video_name, "scores.pt"
+        ))
     except:
         print("Failed", scores.keys())
+
     # write the output masks as palette PNG files to output_mask_dir
-    for out_frame_idx, per_obj_output_mask in video_segments.items():
-        save_masks_to_dir(
-            output_mask_dir=output_mask_dir,
-            video_name=video_name,
-            frame_name=frame_names[out_frame_idx],
-            per_obj_output_mask=per_obj_output_mask,
-            height=height,
-            width=width,
-            per_obj_png_file=per_obj_png_file,
-            output_palette=output_palette,
-            video_dir=video_dir
-        )
+    if bad_frames > 100:
+        for out_frame_idx, per_obj_output_mask in video_segments.items():
+            save_masks_to_dir(
+                output_mask_dir=output_mask_dir,
+                video_name=video_name,
+                frame_name=frame_names[out_frame_idx],
+                per_obj_output_mask=per_obj_output_mask,
+                height=height,
+                width=width,
+                per_obj_png_file=per_obj_png_file,
+                output_palette=output_palette,
+                video_dir=video_dir
+            )
 
 
 @torch.inference_mode()
@@ -335,13 +348,6 @@ def vos_separate_inference_per_object(
         ):
             obj_scores = out_mask_logits.cpu().numpy()
             output_scores_per_object[object_id][out_frame_idx] = obj_scores
-
-    def print_keys(d, i):
-        for key in d:
-            print(f"{i}: {key}")
-            if type(d[key]) == dict:
-                print_keys(d[key], i+1)
-    print_keys(inference_state, 0)
     
     # post-processing: consolidate the per-object scores into per-frame masks
     os.makedirs(os.path.join(output_mask_dir, video_name), exist_ok=True)
@@ -398,14 +404,14 @@ def main():
     parser.add_argument(
         "--base_video_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/LVOS/valid/JPEGImages",
+        default="/work/nvme/bdnb/dzhao3/train/JPEGImages",
         # default="/work/hdd/bdnb/dzhao3/datasets/train/JPEGImages",
         help="directory containing videos (as JPEG files) to run VOS prediction on",
     )
     parser.add_argument(
         "--input_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/LVOS/valid/Annotations",
+        default="/work/nvme/bdnb/dzhao3/train/Annotations",
         # default="/work/hdd/bdnb/dzhao3/datasets/train/Annotations",
         help="directory containing input masks (as PNG files) of each video",
     )
@@ -418,7 +424,7 @@ def main():
     parser.add_argument(
         "--output_mask_dir",
         type=str,
-        default="/projects/bdnb/dzhao3/outputs/score_multiobj_dispersed",
+        default="/work/nvme/bdnb/dzhao3/outputs/score_train",
         help="directory to save the output masks (as PNG files)",
     )
     parser.add_argument(
@@ -498,7 +504,8 @@ def main():
     # video_names = ['MKnlVo6x', 'dtHbJvYy', '7K7WVzGG', 'KfcCU1ma', 'ScFTYisJ', 'xpI7xRWN',
     #                '48f9Llhg', 'f4DjwV55', 'raql9H7f', 'EWCZAcdt', ]
     video_names = video_names[::-1]
-    desired_videos = ['D4AgqLQL']
+    desired_videos = [] #['D4AgqLQL', 'KfcCU1ma', '7K7WVzGG', 'cUD1dwuP', 'raql9H7f']
+    only_process_desired = False
     for n_video, video_name in enumerate(video_names):
         finished_videos = [
             p
@@ -511,6 +518,11 @@ def main():
         # if video_name not in ['cUD1dwuP']:
             print("Skipping", video_name)
             continue
+
+        if only_process_desired and video_name not in desired_videos:
+            print("Skipping", video_name)
+            continue
+
         print(f"\n{n_video + 1}/{len(video_names)} - running on {video_name}")
 
         if not args.track_object_appearing_later_in_video:

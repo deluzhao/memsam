@@ -783,7 +783,7 @@ class SAM2VideoPredictor(SAM2Base):
                     storage_key = "non_cond_frame_outputs"
 
                     if i == 0:
-                        num_mem = min(self.num_maskmem * 2 - 1, frame_idx - start_frame_idx)
+                        num_mem = min(self.num_maskmem * 2, frame_idx - start_frame_idx)
                         object_mem_score = torch.ones(len(obj_ids), num_mem, device=device).to(torch.bfloat16).requires_grad_(True)
                         used_mem_score = object_mem_score
                         # optimizer = torch.optim.Adam([object_mem_score], lr=1)
@@ -791,7 +791,7 @@ class SAM2VideoPredictor(SAM2Base):
                         object_mem_score = output_dict[storage_key][frame_idx]["object_mem_score"]
                         used_mem_score = object_mem_score
                     else:
-                        if frame_idx - start_frame_idx <= num_mem:
+                        if frame_idx - start_frame_idx <= self.num_maskmem:
                             object_mem_score = torch.ones(len(obj_ids), num_mem, device=device)
                             used_mem_score = object_mem_score
                         else:
@@ -800,9 +800,9 @@ class SAM2VideoPredictor(SAM2Base):
                             values, indices = torch.topk(used_mem_score, self.num_maskmem)
                             used_mem_score = torch.zeros_like(used_mem_score).scatter(-1, indices, 1)
                             for obj in range(len(obj_ids)):
-                                if loss[obj].sum() > 0.9:
+                                if loss[obj].sum() > 0.99:
                                     used_mem_score[obj] = 0
-                                    used_mem_score[obj,self.num_maskmem+1:num_mem] = 1
+                                    used_mem_score[obj,self.num_maskmem+1:] = 1
                                     used_mem_score[obj,0] = 1
                         print("Final Scores:", used_mem_score.detach())
 
@@ -837,19 +837,18 @@ class SAM2VideoPredictor(SAM2Base):
                     loss = dice_loss(video_res_masks.squeeze(1), frame_mask, len(obj_ids))
                     grad_input, = torch.autograd.grad(loss.sum() / len(obj_ids), current_out["object_mem_score"], allow_unused=True)
                     current_out["object_mem_score"] = (current_out["object_mem_score"].detach() - grad_input * 3)
-                    if i % 5 == 0:
+                    if i % 10 == 9:
                         print(f"Mask Shapes {frame_idx}, {i}:", frame_mask.shape, video_res_masks.shape)
                         print("Scores:", current_out["object_mem_score"])
                         print("Loss:", loss.sum() / len(obj_ids))
                     current_out["object_mem_score"] = torch.clamp(current_out["object_mem_score"], min=0).requires_grad_(True)
-                    if torch.max(torch.abs(grad_input)) < 1e-6:
-                        i = i+10
                     # loss.backward(retain_graph=(i < grad_iter - 1))
                     # optimizer.step()
                     # optimizer.zero_grad()
                 elif frame_mask is not None and i == grad_iter:
                     current_out["object_mem_score"] = current_out["object_mem_score"].detach()
                     loss = dice_loss(video_res_masks.squeeze(1), frame_mask, len(obj_ids))
+                    current_out["loss"] = loss.detach()
                     print("Final Loss:", loss.sum() / len(obj_ids))
                 elif frame_mask is None:
                     i = grad_iter+2

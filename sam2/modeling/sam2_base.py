@@ -737,7 +737,7 @@ class SAM2Base(torch.nn.Module):
                     chosen_frames.append(prev_frame_idx)
                     t_pos_and_prevs.append((t_pos, out))
 
-            if object_mem_score.requires_grad:
+            if self.training or object_mem_score.requires_grad:
                 for t, (t_pos, prev) in enumerate(t_pos_and_prevs):
                     
                     if prev is None:
@@ -751,21 +751,18 @@ class SAM2Base(torch.nn.Module):
                     maskmem_enc = maskmem_enc.flatten(2).permute(2, 0, 1)
                     
                     # Temporal positional encoding
+                    tpos_enc_idx = ref_frames - t_pos - 1
                     if t_pos == 0:
                         t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - 1]
-                    elif len(chosen_frames) > self.num_maskmem - 1:
-                        multiplier = len(chosen_frames) / (self.num_maskmem - 1)
-                        pos_idx = self.num_maskmem - (t_pos+1) / multiplier - 1
-                        lower, upper = math.floor(pos_idx), math.ceil(pos_idx)
-                        diff = pos_idx - lower
-                        t_pos_enc = self.maskmem_tpos_enc[lower] * (1 - diff) + self.maskmem_tpos_enc[upper] * diff
+                    elif tpos_enc_idx >= self.num_maskmem - 1:
+                        t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - 2]
                     else:
-                        t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - t - 1]
+                        t_pos_enc = self.maskmem_tpos_enc[tpos_enc_idx]
+
                     to_cat_memory_pos_embed.append(maskmem_enc + t_pos_enc)
             else:
                 per_obj_memory, per_obj_memory_pos_embed = defaultdict(list), defaultdict(list)
-                per_obj_tpos = defaultdict(int)
-                for t, (t_pos, prev) in enumerate(t_pos_and_prevs):
+                for t_pos, prev in t_pos_and_prevs:
                     if prev is None:
                         continue  # skip padding frames
 
@@ -779,25 +776,19 @@ class SAM2Base(torch.nn.Module):
 
                     n_obj = object_mem_score.shape[0]
                     for i in range(n_obj):
-                        if object_mem_score[i][t] == 1:
+                        if object_mem_score[i][t_pos] == 1:
                             per_obj_memory[i].append(feats[:,i,:].unsqueeze(1))
 
+                            tpos_enc_idx = ref_frames - t_pos - 1
                             if t_pos == 0:
                                 t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - 1]
-                            elif object_mem_score[i,0] == 0:
-                                multiplier = (len(chosen_frames)+1) / (self.num_maskmem - 1)
-                                pos_idx = self.num_maskmem - (t_pos+1) / multiplier - 1
-                                lower, upper = math.floor(pos_idx), math.ceil(pos_idx)
-                                diff = pos_idx - lower
-                                t_pos_enc = self.maskmem_tpos_enc[lower] * (1 - diff) + self.maskmem_tpos_enc[upper] * diff
+                            elif tpos_enc_idx >= self.num_maskmem - 1:
+                                t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - 2]
                             else:
-                                t_pos_enc = self.maskmem_tpos_enc[self.num_maskmem - per_obj_tpos[i] - 1]
+                                t_pos_enc = self.maskmem_tpos_enc[tpos_enc_idx]
 
                             per_obj_memory_pos_embed[i].append(maskmem_enc[:,i,:].unsqueeze(1) + t_pos_enc)
-                            per_obj_tpos[i] += 1
 
-                        if per_obj_tpos[i] == 0:
-                            per_obj_tpos[i] = 1
                 to_cat_memory = [torch.cat([per_obj_memory[obj][idx] 
                                 for obj in range(n_obj)], dim=1) 
                                 for idx in range(len(per_obj_memory[0]))]
@@ -841,15 +832,13 @@ class SAM2Base(torch.nn.Module):
                 #     )
                 #     if out is not None:
                 #         pos_and_ptrs.append((t_diff, out["obj_ptr"]))
-                t_diff = 1
                 for chosen_frame_idx in chosen_frames:
                     out = output_dict["non_cond_frame_outputs"].get(
                         chosen_frame_idx, unselected_cond_outputs.get(chosen_frame_idx, None)
                     )
                     
                     if out is not None:
-                        pos_and_ptrs.append((t_diff, out["obj_ptr"]))
-                    t_diff += 1
+                        pos_and_ptrs.append((frame_idx - chosen_frame_idx, out["obj_ptr"]))
 
                 if not object_mem_score.requires_grad:
                     per_obj_ptr = defaultdict(list)
@@ -860,6 +849,7 @@ class SAM2Base(torch.nn.Module):
                             if object_mem_score[i][t] == 1:
                                 per_obj_ptr[i].append(feats[i,:].unsqueeze(0))
                                 per_obj_t_diffs[i].append(t_diff)
+                                
                     pos_and_ptrs = [([per_obj_t_diffs[obj][idx] for obj in range(n_obj)],
                                     torch.cat([per_obj_ptr[obj][idx] for obj in range(n_obj)], dim=0))
                                     for idx in range(len(per_obj_ptr[0]))]
